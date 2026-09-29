@@ -2,6 +2,13 @@
 
 # MacPlay
 
+<p align="center">
+  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.0.0-2563eb?style=flat-square" alt="版本1.0.0"></a>
+  <a href="#当前状态"><img src="https://img.shields.io/badge/macOS-14%2B-555555?style=flat-square" alt="macOS14及以上"></a>
+  <a href="#当前状态"><img src="https://img.shields.io/badge/platform-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon平台"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="GPL-3.0-or-later许可证"></a>
+</p>
+
 让Mac通过USB或共用Wi-Fi接收iPhone的CarPlay画面，提供原生macOS设置界面、分辨率选择与帧率请求。
 
 基于LIVI改造，设置界面使用SwiftUI，视频窗口使用AppKit。
