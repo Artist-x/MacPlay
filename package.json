@@ -1,0 +1,21 @@
+{
+  "name": "macplay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MacPlay原生macOS CarPlay接收端",
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "build": "bash scripts/build-macplay.sh",
+    "build:engine": "tsc -p native/Engine/tsconfig.json",
+    "test": "node --test native/Engine/display.test.cjs"
+  },
+  "dependencies": {
+    "livi-crypto": "workspace:*",
+    "livi-gst-video": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2"
+  },
+  "packageManager": "pnpm@11.19.0"
+}

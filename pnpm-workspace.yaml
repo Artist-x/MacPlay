@@ -1,0 +1,3 @@
+packages:
+  - native/livi-gst-video
+  - native/livi-crypto

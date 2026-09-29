@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "claims": [
+    {
+      "id": "version",
+      "quote": "当前版本为1.0.0，构建号12",
+      "level": "implementation",
+      "reasoning": "打包脚本声明的应用版本。",
+      "evidence": [
+        {
+          "path": "scripts/package-native.sh",
+          "excerpt": "<key>CFBundleVersion</key><string>12</string>"
+        }
+      ]
+    },
+    {
+      "id": "connection",
+      "quote": "有线与无线CarPlay连接均已在真实iPhone上跑通",
+      "level": "device",
+      "reasoning": "此前两种出画面记录及使用者当前确认。",
+      "evidence": [
+        {
+          "path": "docs/MACPLAY-VALIDATION.md",
+          "excerpt": "已经完全跑通"
+        }
+      ]
+    },
+    {
+      "id": "fixed",
+      "quote": "按固定窗口对应的真实物理尺寸上报显示参数",
+      "level": "implementation",
+      "reasoning": "像素占面板比例换算毫米数。",
+      "evidence": [
+        {
+          "path": "native/Engine/display.ts",
+          "excerpt": "settings.screenWidthMm*width/settings.screenPixelWidth"
+        }
+      ]
+    },
+    {
+      "id": "display-tests",
+      "quote": "9项显示参数测试",
+      "level": "simulation",
+      "reasoning": "仅验证参数计算。",
+      "evidence": [
+        {
+          "path": "docs/MACPLAY-VALIDATION.md",
+          "excerpt": "9项显示参数测试通过"
+        }
+      ]
+    },
+    {
+      "id": "fallback-tests",
+      "quote": "6项回退测试",
+      "level": "simulation",
+      "reasoning": "验证视频启动失败回退分支。",
+      "evidence": [
+        {
+          "path": "docs/MACPLAY-VALIDATION.md",
+          "excerpt": "6项针对性回退测试通过"
+        }
+      ]
+    },
+    {
+      "id": "native",
+      "quote": "对照原图为3456×2170",
+      "level": "device",
+      "reasoning": "使用者提供的智能缩放对照原图。",
+      "evidence": [
+        {
+          "path": "docs/MACPLAY-VALIDATION.md",
+          "excerpt": "关闭后的对照达到请求像素"
+        }
+      ]
+    },
+    {
+      "id": "license",
+      "quote": "GPL-3.0-or-later",
+      "level": "implementation",
+      "reasoning": "上游包声明与现有LICENSE。",
+      "evidence": [
+        {
+          "path": "package.json",
+          "excerpt": "\"license\": \"GPL-3.0-or-later\""
+        }
+      ]
+    }
+  ]
+}

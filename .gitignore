@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+*.tsbuildinfo
+.DS_Store
+**/target/
+**/build/
+native/macplay-bluetooth/macplay-bluetooth
+**/identity.pk8
+**/certificate.p7b
+**/authentication/
+*.log
+*.dmg
