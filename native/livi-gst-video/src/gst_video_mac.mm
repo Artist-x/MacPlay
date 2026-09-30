@@ -2,6 +2,8 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
+#include <deque>
+#include "macplay_scroll.h"
 
 static NSWindow *macplayWindow;
 static double mpAspect = 16.0 / 9.0;
@@ -332,25 +334,62 @@ extern "C" void livi_set_backdrop(guintptr parent, double r, double g, double b)
 
 // MacPlay's standalone AppKit video surface; no browser or HTML UI.
 struct MPInput { double x,y; int down; };
-static MPInput mpInputs[128]; static int mpRead=0, mpWrite=0;
-@interface MacPlayInputView : NSView
+static std::deque<MPInput> mpInputs;
+static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});}
+@interface MacPlayInputView : NSView {
+ MPScrollGesture _scroll;
+ NSTimer *_scrollTimer;
+ BOOL _pointerDown;
+}
 @end
 @implementation MacPlayInputView
 - (BOOL)acceptsFirstResponder { return YES; }
+- (void)finishScroll {
+ [_scrollTimer invalidate];_scrollTimer=nil;
+ if(_scroll.active){mpQueue(_scroll.x,_scroll.y,0);_scroll.end();}
+}
+- (void)releaseInput:(NSNotification *)note {
+ (void)note;[self finishScroll];
+ if(_pointerDown){mpQueue(_scroll.x,_scroll.y,0);_pointerDown=NO;}
+}
 - (void)record:(NSEvent *)event down:(int)down {
+ [self finishScroll];
  NSPoint p=[self convertPoint:event.locationInWindow fromView:nil];
  NSRect video=mpVideoRect(self,mpAspect);
  if(video.size.width<=0||video.size.height<=0)return;
  double x=(p.x-video.origin.x)/video.size.width,y=1-(p.y-video.origin.y)/video.size.height;
- if(x<0||x>1||y<0||y>1)return;
- int next=(mpWrite+1)%128;if(next==mpRead)return;
- mpInputs[mpWrite]={x,y,down};mpWrite=next;
+ if(!_pointerDown&&(x<0||x>1||y<0||y>1))return;
+ x=MPScrollGesture::clamp(x);y=MPScrollGesture::clamp(y);
+ _scroll.x=x;_scroll.y=y;_pointerDown=down==1;mpQueue(x,y,down);
 }
 - (void)mouseDown:(NSEvent *)event { [self record:event down:1]; }
 - (void)mouseDragged:(NSEvent *)event { [self record:event down:1]; }
 - (void)mouseUp:(NSEvent *)event { [self record:event down:0]; }
+- (void)scrollWheel:(NSEvent *)event {
+ if(_pointerDown)return;
+ // CarPlay supplies its own fling after release; do not replay macOS momentum.
+ if(event.momentumPhase!=NSEventPhaseNone){[self finishScroll];return;}
+ if(event.phase & (NSEventPhaseEnded|NSEventPhaseCancelled)){[self finishScroll];return;}
+ NSRect video=mpVideoRect(self,mpAspect);
+ if(video.size.width<=0||video.size.height<=0)return;
+ double dx=event.scrollingDeltaX,dy=event.scrollingDeltaY;
+ if(!event.hasPreciseScrollingDeltas){dx*=12;dy*=12;}
+ if(dx==0&&dy==0)return;
+ if(!_scroll.active){
+  NSPoint p=[self convertPoint:event.locationInWindow fromView:nil];
+  double x=(p.x-video.origin.x)/video.size.width,y=1-(p.y-video.origin.y)/video.size.height;
+  if(!_scroll.begin(x,y))return;
+  mpQueue(_scroll.x,_scroll.y,1);
+ }
+ // NSEvent deltas already reflect the user's natural-scroll setting.
+ _scroll.move(dx/video.size.width,-dy/video.size.height);
+ mpQueue(_scroll.x,_scroll.y,1);
+ [_scrollTimer invalidate];
+ _scrollTimer=[NSTimer scheduledTimerWithTimeInterval:0.15 target:self selector:@selector(finishScroll) userInfo:nil repeats:NO];
+}
 - (void)keyDown:(NSEvent *)event {
  if(event.keyCode==53) {
+  [self releaseInput:nil];
   if(macplayWindow.styleMask & NSWindowStyleMaskFullScreen) {
    mpHideAfterFullscreen=true;[macplayWindow toggleFullScreen:nil];
   } else [macplayWindow orderOut:nil];
@@ -371,6 +410,7 @@ extern "C" uintptr_t macplay_window(double aspect) {
   MacPlayInputView *view=[[MacPlayInputView alloc] initWithFrame:macplayWindow.contentView.bounds];
   [view setWantsLayer:YES];view.layer.backgroundColor=CGColorGetConstantColor(kCGColorBlack);
   [macplayWindow setContentView:view];mpSetWindowAspect(mpAspect);
+  [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
  [macplayWindow makeKeyAndOrderFront:nil];
  if(mpDefaultFullscreen && !(macplayWindow.styleMask & NSWindowStyleMaskFullScreen) && !mpEnteringFullscreen) {
@@ -391,6 +431,6 @@ extern "C" void macplay_pump() {
  }
 }
 extern "C" int macplay_input(double *x,double *y,int *down) {
- if(mpRead==mpWrite)return 0;MPInput e=mpInputs[mpRead];mpRead=(mpRead+1)%128;
+ if(mpInputs.empty())return 0;MPInput e=mpInputs.front();mpInputs.pop_front();
  *x=e.x;*y=e.y;*down=e.down;return 1;
 }

@@ -1,8 +1,10 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
 const {FrameRateFallback}=require('../../build/engine/frameRateFallback.js');
-test('120fps startup timeout retries once after RECORD',async()=>{let calls=0;const g=new FrameRateFallback(120,()=>calls++,5);g.sessionStarted();g.sessionStarted();await new Promise(r=>setTimeout(r,15));g.sessionEnded();assert.equal(calls,1)});
-test('early session end after RECORD retries once',()=>{let calls=0;const g=new FrameRateFallback(120,()=>calls++);g.sessionStarted();g.sessionEnded();g.sessionEnded();assert.equal(calls,1)});
-test('pairing failure before RECORD never retries',()=>{let calls=0;const g=new FrameRateFallback(120,()=>calls++);g.sessionEnded();assert.equal(calls,0)});
-test('video arrival cancels fallback even if session later closes',async()=>{let calls=0;const g=new FrameRateFallback(120,()=>calls++,5);g.sessionStarted();g.videoStarted();g.sessionEnded();await new Promise(r=>setTimeout(r,15));assert.equal(calls,0)});
-test('stop cancels pending retry',async()=>{let calls=0;const g=new FrameRateFallback(120,()=>calls++,5);g.sessionStarted();g.cancel();await new Promise(r=>setTimeout(r,15));assert.equal(calls,0)});
-test('90fps failure cannot trigger another fallback',async()=>{let calls=0;const g=new FrameRateFallback(90,()=>calls++,5);g.sessionStarted();g.sessionEnded();await new Promise(r=>setTimeout(r,15));assert.equal(calls,0)});
+const wait=()=>new Promise(r=>setTimeout(r,15));
+test('120 timeout retries 90 exactly once',async()=>{const calls=[];const g=new FrameRateFallback(120,f=>calls.push(f),5);g.negotiationStarted();g.negotiationStarted();await wait();g.failed();assert.deepEqual(calls,[90])});
+test('90 failure retries 60 exactly once',()=>{const calls=[];const g=new FrameRateFallback(90,f=>calls.push(f));g.negotiationStarted();g.failed();g.failed();assert.deepEqual(calls,[60])});
+test('complete timeout chain terminates at 60',async()=>{const calls=[];for(const fps of [120,90,60]){const g=new FrameRateFallback(fps,f=>calls.push(f),5);g.negotiationStarted();await wait();}assert.deepEqual(calls,[90,60])});
+test('pairing and authentication failures cannot downgrade',()=>{const g=new FrameRateFallback(120,()=>assert.fail());g.failed();g.cancel()});
+test('video startup cancels pending retry',async()=>{const g=new FrameRateFallback(120,()=>assert.fail(),5);g.negotiationStarted();g.videoStarted();g.failed();await wait()});
+test('manual stop cancels pending retry',async()=>{const g=new FrameRateFallback(90,()=>assert.fail(),5);g.negotiationStarted();g.cancel();g.failed();await wait()});
+test('30 and 60 failures never retry',async()=>{for(const fps of [30,60]){const g=new FrameRateFallback(fps,()=>assert.fail(),5);g.negotiationStarted();g.failed();await wait()}});

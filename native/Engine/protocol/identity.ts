@@ -26,7 +26,7 @@ export interface CpIdentity {
 let cached: CpIdentity | null = null
 
 function identityFile(): string {
-  return join(app.getPath('userData'), 'cp', 'identity.json')
+  return join(app.getPath('userData'), 'cp', 'macplay-v3', 'identity.json')
 }
 
 export function loadOrCreateIdentity(): CpIdentity {
@@ -48,7 +48,7 @@ export function loadOrCreateIdentity(): CpIdentity {
   const kp = ed25519Generate()
   const pairingId = randomUUID()
   try {
-    mkdirSync(join(app.getPath('userData'), 'cp'), { recursive: true })
+    mkdirSync(join(app.getPath('userData'), 'cp', 'macplay-v3'), { recursive: true })
     writeFileAtomic(
       file,
       JSON.stringify({
@@ -69,4 +69,10 @@ export function loadOrCreateIdentity(): CpIdentity {
     pkHex: kp.pubRaw.toString('hex')
   }
   return cached
+}
+
+/** Stable, locally administered accessory address, independent of network interfaces. */
+export function accessoryDeviceId(publicKey: Buffer): string {
+  if (publicKey.length !== 32) throw new Error('Invalid accessory public key')
+  return [2,...publicKey.subarray(0,5)].map(v=>v.toString(16).padStart(2,'0')).join(':').toUpperCase()
 }

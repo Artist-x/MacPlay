@@ -9,7 +9,7 @@ test('complete view area preserves requested pixels',()=>{
  const d=info.displays[0];assert.equal(d.widthPixels,1920);assert.equal(d.heightPixels,1080);
  assert.equal(d.viewAreas[0].widthPixels,1920);assert.equal(d.viewAreas[0].heightPixels,1080);
 });
-for(const [width,height] of [[1280,720],[1920,1080],[2560,1440],[3840,2160],[3456,2170]])test(`fixed physical size for ${width}x${height}`,()=>{
+for(const [width,height] of [[1280,720],[1920,1080],[2560,1440],[3456,2170]])test(`fixed physical size for ${width}x${height}`,()=>{
  for(const fps of [30,60,90,120]){
   const d=config({width,height,fps});assert.equal(d.widthPixels,width);assert.equal(d.heightPixels,height);assert.equal(d.fps,fps);
   assert.equal(d.widthPhysicalMm,Math.round(panel.screenWidthMm*width/panel.screenPixelWidth));
@@ -25,3 +25,5 @@ test('missing real panel measurements are rejected instead of invented',()=>{
 test('pixel rounding and unsupported frame rate fallback',()=>{
  const d=config({width:1921,height:1081,fps:999});assert.equal(d.widthPixels,1922);assert.equal(d.heightPixels,1082);assert.equal(d.fps,60);
 });
+
+test('high frame rate requests are reported unchanged',()=>{for(const fps of [90,120])assert.equal(config({fps}).fps,fps)});

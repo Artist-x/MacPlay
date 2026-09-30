@@ -32,6 +32,7 @@ struct PlaySettings: Codable {
     @Published var status = "尚未启动接收"
     @Published var detail = "连接iPhone后启动接收端。"
     @Published var frameRateFallbackNote = ""
+    private var fallbackQueued=false
     @Published var running = false
     @Published var logs = ""
     @Published var credentialsReady = false
@@ -55,6 +56,8 @@ struct PlaySettings: Codable {
         locationManager.delegate = self
         try? FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if let data = try? Data(contentsOf: configURL), let decoded = try? JSONDecoder().decode(PlaySettings.self, from:data) { settings = decoded }
+        if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
+        if settings.resolution == "3840x2160" { settings.resolution="native" }
         updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
         usbTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshUSB() }
@@ -188,8 +191,9 @@ struct PlaySettings: Codable {
         let data=try JSONEncoder().encode(settings);try data.write(to:configURL,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)
     }
-    func start() {
-        if settings.fps == 120 {frameRateFallbackNote=""}
+    func start(isFallback:Bool=false) {
+        if !isFallback {frameRateFallbackNote=""}
+        fallbackQueued=false
         stop();inspectCredentials()
         settings.bluetoothMAC=IOBluetoothHostController.default()?.addressAsString()?.replacingOccurrences(of:"-",with:":") ?? ""
         guard credentialsReady else {status="缺少认证文件";detail="请在诊断页面导入有使用权限的配套认证文件。";return}
@@ -232,12 +236,17 @@ struct PlaySettings: Codable {
             let line=String(decoding:pending[..<newline],as:UTF8.self);pending.removeSubrange(...newline)
             if let data=line.data(using:.utf8),let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:String] {
                 if let message=value["status"] {status=message;detail=value["detail"] ?? ""}
-                if value["fallbackFps"] == "90",running,settings.fps == 120 {
+                if let nextText=value["fallbackFps"],let next=Int(nextText),running,!fallbackQueued,
+                   (settings.fps==120 && next==90 || settings.fps==90 && next==60) {
+                    fallbackQueued=true
+                    let failedTask=process
+                    let previous=settings.fps
                     Task { @MainActor [weak self] in
-                        guard let self,self.running,self.settings.fps == 120 else {return}
-                        self.settings.fps=90
-                        self.frameRateFallbackNote="120fps会话未进入视频，已自动改用90fps重连。"
-                        self.start()
+                        guard let self,self.running,self.process === failedTask,self.settings.fps==previous else {return}
+                        self.settings.fps=next
+                        let note="\(previous)fps协商未启动视频，已改用\(next)fps重连。"
+                        self.frameRateFallbackNote += self.frameRateFallbackNote.isEmpty ? note : "\n"+note
+                        self.start(isFallback:true)
                     }
                 }
                 readUSBEvent(value)
@@ -305,7 +314,7 @@ struct SettingsView: View {
                         Section("视频分辨率") {
                             Picker("分辨率",selection:$model.settings.resolution) {
                                 Text("屏幕原生像素（避开刘海）").tag("native")
-                                ForEach(["1280x720","1920x1080","2560x1440","3840x2160"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
+                                ForEach(["1280x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
                                 Text("自定义").tag("custom")
                             }.onChange(of:model.settings.resolution){_,_ in model.updateResolution()}
                             if model.settings.resolution == "custom" {
@@ -317,8 +326,8 @@ struct SettingsView: View {
                         }
                         Section("流畅度") {
                             Picker("最高帧率",selection:$model.settings.fps){ForEach([30,60,90,120],id:\.self){Text("\($0)fps").tag($0)}}
+                            Text("高帧率为实验请求：120fps协商失败后改用90fps，90fps仍失败则改用60fps。发起CarPlay连接后20秒未启动视频视为失败。").font(.callout).foregroundStyle(.secondary)
                             if !model.frameRateFallbackNote.isEmpty {Text(model.frameRateFallbackNote).font(.callout).foregroundStyle(.secondary)}
-                            Text("选择120fps后，如果会话已建立但15秒内没有视频，或出画面前会话结束，将自动改用90fps重连一次。").font(.callout).foregroundStyle(.secondary)
                             Text("上报所选分辨率与固定窗口对应的真实物理尺寸，不提供倍率调节。请关闭CarPlay自身的“智能缩放显示”以避免自动缩放。帧率为请求上限。").font(.callout).foregroundStyle(.secondary)
                         }
                     case .audio:
@@ -335,7 +344,7 @@ struct SettingsView: View {
                             Text("认证材料单独保存在本机，不包含在源码和安装包内。").font(.callout).foregroundStyle(.secondary)
                         }
                         Section("最近日志") {ScrollView {Text(model.logs.isEmpty ? "暂无日志":model.logs).font(.system(.caption,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.frame(height:180)}
-                        Section("关于") {LabeledContent("MacPlay",value:"1.0.0");Text("基于LIVI，参考DiPlay。保留原作者版权，沿用GPL-3.0-or-later。支持有线与无线CarPlay连接。").font(.callout).foregroundStyle(.secondary)}
+                        Section("关于") {LabeledContent("MacPlay",value:"1.0.1");Text("基于LIVI，参考DiPlay。保留原作者版权，沿用GPL-3.0-or-later。支持有线与无线CarPlay连接。").font(.callout).foregroundStyle(.secondary)}
                     }
                 }.formStyle(.grouped)
                 Divider()

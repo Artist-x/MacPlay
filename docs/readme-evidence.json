@@ -3,13 +3,13 @@
   "claims": [
     {
       "id": "version",
-      "quote": "当前版本为1.0.0，构建号12",
+      "quote": "当前版本为1.0.1，构建号15",
       "level": "implementation",
       "reasoning": "打包脚本声明的应用版本。",
       "evidence": [
         {
           "path": "scripts/package-native.sh",
-          "excerpt": "<key>CFBundleVersion</key><string>12</string>"
+          "excerpt": "<key>CFBundleVersion</key><string>15</string>"
         }
       ]
     },
@@ -38,30 +38,6 @@
       ]
     },
     {
-      "id": "display-tests",
-      "quote": "9项显示参数测试",
-      "level": "simulation",
-      "reasoning": "仅验证参数计算。",
-      "evidence": [
-        {
-          "path": "docs/MACPLAY-VALIDATION.md",
-          "excerpt": "9项显示参数测试通过"
-        }
-      ]
-    },
-    {
-      "id": "fallback-tests",
-      "quote": "6项回退测试",
-      "level": "simulation",
-      "reasoning": "验证视频启动失败回退分支。",
-      "evidence": [
-        {
-          "path": "docs/MACPLAY-VALIDATION.md",
-          "excerpt": "6项针对性回退测试通过"
-        }
-      ]
-    },
-    {
       "id": "native",
       "quote": "对照原图为3456×2170",
       "level": "device",
@@ -82,6 +58,30 @@
         {
           "path": "package.json",
           "excerpt": "\"license\": \"GPL-3.0-or-later\""
+        }
+      ]
+    },
+    {
+      "id": "independent-identity",
+      "quote": "独立的持久化配对密钥",
+      "level": "implementation",
+      "reasoning": "使用MacPlay专属身份目录生成配对密钥，车机地址从其公钥派生。",
+      "evidence": [
+        {
+          "path": "native/Engine/protocol/identity.ts",
+          "excerpt": "'cp', 'macplay-v3', 'identity.json'"
+        }
+      ]
+    },
+    {
+      "id": "fps-fallback-chain",
+      "quote": "120→90→60自动回退",
+      "level": "implementation",
+      "reasoning": "认证后CarPlay启动请求开启计时，失败降低一档；60fps不会继续降档。",
+      "evidence": [
+        {
+          "path": "native/Engine/frameRateFallback.ts",
+          "excerpt": "this.retry(this.fps===120?90:60)"
         }
       ]
     }
