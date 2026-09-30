@@ -11,3 +11,8 @@ native/macplay-bluetooth/macplay-bluetooth
 **/authentication/
 *.log
 *.dmg
+
+# Explicit 1.1.0 bundled authentication inputs
+!assets/authentication/
+!assets/authentication/identity.pk8
+!assets/authentication/certificate.p7b

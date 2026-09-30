@@ -6,6 +6,11 @@
 #include "macplay_scroll.h"
 
 static NSWindow *macplayWindow;
+static uint32_t mpDisplayID;
+static NSScreen *mpSelectedScreen() {
+ for(NSScreen *screen in NSScreen.screens) if([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue]==mpDisplayID)return screen;
+ return NSScreen.screens.firstObject;
+}
 static double mpAspect = 16.0 / 9.0;
 static double mpWidth = 1920, mpHeight = 1080;
 static double mpPanelWidth = 1920, mpPanelHeight = 1080;
@@ -76,7 +81,7 @@ static void mpSetWindowAspect(double aspect) {
   if (macplayWindow.styleMask & NSWindowStyleMaskFullScreen) return;
 
   if (mpEnteringFullscreen) return;
-  NSScreen *screen = [NSScreen screens].firstObject;
+  NSScreen *screen = mpSelectedScreen();
   if (!screen) return;
   // The desktop's backingScaleFactor can describe a scaled render buffer,
   // not the panel. Map physical video pixels through the physical panel size.
@@ -153,6 +158,11 @@ static void mpApplyRenderScale(NSView *view) {
 }
 @end
 
+extern "C" void macplay_select_display(uint32_t id) {mpDisplayID=id;}
+extern "C" void macplay_close_window() {
+ if(macplayWindow){[macplayWindow orderOut:nil];[macplayWindow close];macplayWindow=nil;mpWindowDelegate=nil;}
+ mpEnteringFullscreen=false;mpHideAfterFullscreen=false;
+}
 extern "C" void macplay_configure_window(double width, double height,
     double panelWidth, double panelHeight, bool fullscreen) {
   if (!isfinite(width) || !isfinite(height) || !isfinite(panelWidth) ||
@@ -381,8 +391,8 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
   if(!_scroll.begin(x,y))return;
   mpQueue(_scroll.x,_scroll.y,1);
  }
- // NSEvent deltas already reflect the user's natural-scroll setting.
- _scroll.move(dx/video.size.width,-dy/video.size.height);
+ // CarPlay touch coordinates increase downwards; preserve NSEvent vertical direction.
+ _scroll.scroll(dx,dy,video.size.width,video.size.height);
  mpQueue(_scroll.x,_scroll.y,1);
  [_scrollTimer invalidate];
  _scrollTimer=[NSTimer scheduledTimerWithTimeInterval:0.15 target:self selector:@selector(finishScroll) userInfo:nil repeats:NO];
@@ -409,7 +419,9 @@ extern "C" uintptr_t macplay_window(double aspect) {
   mpWindowDelegate=[MacPlayWindowDelegate new]; [macplayWindow setDelegate:mpWindowDelegate];
   MacPlayInputView *view=[[MacPlayInputView alloc] initWithFrame:macplayWindow.contentView.bounds];
   [view setWantsLayer:YES];view.layer.backgroundColor=CGColorGetConstantColor(kCGColorBlack);
-  [macplayWindow setContentView:view];mpSetWindowAspect(mpAspect);
+  [macplayWindow setContentView:view];
+  if(NSScreen *screen=mpSelectedScreen()) [macplayWindow setFrameOrigin:screen.frame.origin];
+  mpSetWindowAspect(mpAspect);
   [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
  [macplayWindow makeKeyAndOrderFront:nil];

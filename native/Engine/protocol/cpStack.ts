@@ -210,7 +210,6 @@ export class CpStack extends EventEmitter {
   private _fbN = 0
   private _clusterWantActive = false
   private _videoActive = false
-  private _nightMode: boolean | null = null
   /** Whether the phone reports a call, which it flags as a speech session too. */
   private _callActive = false
   /** Last Siri speech-mode state, so we emit 'speech-active' only on transitions. */
@@ -466,12 +465,6 @@ export class CpStack extends EventEmitter {
       // Event commands are only valid once the session has started (older iOS stalls
       // the bring-up ~5s on a POST /command sent before RECORD). Push the initial
       // night mode now, not on event-channel connect.
-      if (this._nightMode !== null) {
-        this._sendEventCommand(
-          session,
-          encodeBplist({ type: 'setNightMode', params: { nightMode: this._nightMode } })
-        )
-      }
       this.emit('session-active', this._normHost(session.peerHost))
       this._openIapMessageRelay(session)
       return { status: 200 }
@@ -978,6 +971,7 @@ export class CpStack extends EventEmitter {
     } = inProc ?? (await gstHost.openAudio(key, audioOpts))
     meta.hostStreamId = hostStreamId
     meta.inProcess = inProc !== null
+    if(meta.inProcess)setAudioReceiverVolume(hostStreamId,this.cfg.audioVolume?.(prof.audioType) ?? 1,0)
     if (this._audioActive) {
       if (meta.inProcess) setAudioReceiverActive(hostStreamId, true)
       else gstHost.setAudioActive(hostStreamId, true)
@@ -1230,18 +1224,6 @@ export class CpStack extends EventEmitter {
       if (session.clusterScreenNativeId != null && !session.clusterScreenInProcess) {
         gstHost.setActiveFeeder(session.clusterScreenNativeId, active)
       }
-    }
-  }
-
-  /** Tell the phone to switch its CarPlay UI between day and night appearance. */
-  setNightMode(night: boolean): void {
-    this._nightMode = night
-    const s = this._active
-    if (s) {
-      this._sendEventCommand(
-        s,
-        encodeBplist({ type: 'setNightMode', params: { nightMode: night } })
-      )
     }
   }
 

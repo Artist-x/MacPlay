@@ -11,6 +11,7 @@ import { addon, setVideoCallback } from './media'
 import { displayConfig } from './display'
 import { FrameRateFallback } from './frameRateFallback'
 import { acceptsPhone } from './phoneSelection'
+import { audioLevel, disconnectedAfterVideo } from './runtimeControls'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(path.join(dataDir,'settings.json'),'utf8'))
@@ -18,7 +19,8 @@ const log=(status:string,detail:string='')=>process.stdout.write(JSON.stringify(
 const usb=(usbStatus:string,usbError:string='')=>process.stdout.write(JSON.stringify({usbStatus,usbError})+'\n')
 const identity=loadOrCreateIdentity()
 const icons=[256,512].map(size=>({widthPixels:size,heightPixels:size,data:fs.readFileSync(path.join(resources,'icons',`macplay-${size}.png`))}))
-const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,mfi:new CpHelperSock(),oemLabel:'MacPlay',icons,rightHandDrive:false}
+const helperControl=new CpHelperSock()
+const config={deviceName:'MacPlay',deviceId:accessoryDeviceId(identity.pubRaw),btMac:settings.bluetoothMAC||'02:4d:50:00:00:02',sourceVersion:'950.7.1',hevc:true,h264:true,main:displayConfig(settings),port:17000,entertainmentSampleRate:48000 as const,disableAudioOutput:!settings.audioEnabled,audioVolume:(type:number)=>type===2 ? settings.callVolume??1 : type===3 ? settings.volume??1 : 1,audioDevice:()=>settings.outputDevice||undefined,audioInputDevice:()=>settings.inputDevice||undefined,mfi:helperControl,oemLabel:'MacPlay',icons,rightHandDrive:false}
 const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
@@ -28,6 +30,7 @@ const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
  if(stopping||videoReady)return
  process.stdout.write(JSON.stringify({fallbackFps:String(fps),status:`${settings.fps}fps协商未启动视频，改用${fps}fps重连`,detail:"将自动降低帧率请求并重新连接。"})+"\n")
 })
+addon.macplaySelectDisplayOptions(settings.displayID||0)
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native')
 setVideoCallback(()=>{frameRateGuard.videoStarted();videoReady=true;if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('已收到视频配置','CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
@@ -47,10 +50,10 @@ for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({inp
  if(line.includes('wired: MFi auth succeeded')) usb('配件认证已通过，正在建立CarPlay会话')
  if(line.includes('wired: CarPlayStartSession sent')) usb('已发送CarPlay连接参数')
  if(line.includes('usbmuxd carkit failed')) usb('USB通信失败','无法打开iPhone的CarPlay服务，请解锁并确认信任后重新连接。')
- if(line.includes('unplugged')) {wiredReady=false;usb('iPhone已拔出')}
+ if(line.includes('unplugged')) {wiredReady=false;usb('iPhone已拔出');if(videoReady){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}
 })
 helper.on('error',e=>log('连接后端启动失败',e.message))
-helper.on('exit',code=>{if(!stopping)log('连接后端已退出',String(code))})
+helper.on('exit',code=>{if(!stopping){log('连接后端已退出',String(code));process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}})
 const server=net.createServer(socket=>{
  const usbSession=wiredReady && !socket.remoteAddress?.endsWith('%'+settings.wifiInterface)
  log('收到连接请求','正在协商认证与音视频')
@@ -58,8 +61,8 @@ const server=net.createServer(socket=>{
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
- stack.on('session-active',()=>{frameRateGuard.negotiationStarted();stack.setStreamVolume(3,settings.volume??1,0);log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
- stack.on('session-ended',()=>{frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;log('连接已断开','接收端继续等待iPhone')}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
+ stack.on('session-active',()=>{frameRateGuard.negotiationStarted();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
+ stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;log('连接已断开','重新启动接收可再次连接');if(disconnectedAfterVideo(hadVideo,stopping)){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
  stack.on('host-ui-requested',()=>log('返回设置','可切换至MacPlay设置窗口'))
  stack.on('error',(e:Error)=>log('会话错误',e.message))
  stack.attachSocket(socket)
@@ -71,8 +74,25 @@ const pump=setInterval(()=>{
 },8)
 readline.createInterface({input:process.stdin}).on('line',line=>{
  if(line==='show'){if(videoReady)addon.macplayWindowHandle(settings.width/settings.height);else log('等待CarPlay视频','视频尚未建立，暂不打开空白画面窗口。')}
+ try {
+  const update=JSON.parse(line)
+  if(update.command==='seek' && active && videoReady && phoneInfo?.deviceId) {
+   const ms=Number(update.positionMs),id=String(update.requestId||'')
+   if(Number.isInteger(ms)&&ms>=0&&ms<=0xffffffff&&id) {
+    helperControl.seekPlayback(phoneInfo.deviceId,ms,id,typeof update.trackId==='string'?update.trackId:undefined)
+     .catch(()=>process.stdout.write(JSON.stringify({type:'seekResult',requestId:id,sent:false})+'\n'))
+   }
+  }
+  if(update.command==='audio') {
+   settings.volume=audioLevel(update.volume,settings.volume??1)
+   settings.callVolume=audioLevel(update.callVolume,settings.callVolume??1)
+   settings.audioEnabled=!!update.enabled
+   for(const stack of sessions){stack.setStreamVolume(3,settings.volume,0);stack.setStreamVolume(2,settings.callVolume,0);stack.setAudioActive(settings.audioEnabled)}
+  }
+ } catch {}
+ if(line.startsWith('media ')){const index=Number(line.slice(6));if(Number.isInteger(index)&&index>=1&&index<=5)active?.sendMedia(index)}
  if(line==='stop')shutdown()
 })
 let stopping=false
-function shutdown(){if(stopping)return;stopping=true;frameRateGuard.cancel();clearInterval(pump);for(const s of sessions)s.stop();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
+function shutdown(){if(stopping)return;stopping=true;frameRateGuard.cancel();clearInterval(pump);for(const s of sessions)s.stop();addon.macplayCloseVideoWindow();server.close();helper.kill('SIGTERM');setTimeout(()=>process.exit(0),300).unref()}
 process.on('SIGTERM',shutdown);process.on('SIGINT',shutdown);process.stdin.on('end',shutdown)

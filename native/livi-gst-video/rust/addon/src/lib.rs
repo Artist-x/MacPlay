@@ -450,6 +450,8 @@ unsafe extern "C" {
  fn macplay_window(aspect: f64) -> usize;
  fn macplay_configure_window(width: f64,height: f64,panel_width: f64,panel_height: f64,fullscreen: bool);
  fn macplay_pump();
+ fn macplay_select_display(id:u32);
+ fn macplay_close_window();
  fn macplay_input(x: *mut f64,y: *mut f64,down: *mut i32) -> i32;
 }
 #[cfg(target_os="macos")]
@@ -471,3 +473,10 @@ pub fn macplay_pump_events() -> Vec<f64> {
   out
  }
 }
+
+#[cfg(target_os="macos")]
+#[napi]
+pub fn macplay_select_display_options(id:u32) {unsafe {macplay_select_display(id);}}
+#[cfg(target_os="macos")]
+#[napi]
+pub fn macplay_close_video_window() {unsafe {macplay_close_window();}}

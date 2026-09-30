@@ -68,8 +68,17 @@ impl LocationTypes {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct PlaybackSeek {
+    pub phone_id: String,
+    pub position_ms: u32,
+    pub request_id: String,
+    pub track_id: Option<String>,
+}
+
 /// The sending half, held by the helper state.
 pub struct Vehicle {
+    seek: watch::Sender<Option<PlaybackSeek>>,
     location: watch::Sender<(u64, String)>,
     status: watch::Sender<VehicleStatus>,
 }
@@ -77,6 +86,7 @@ pub struct Vehicle {
 /// The receiving half, one per session.
 #[derive(Clone)]
 pub struct VehicleFeed {
+    pub seek: watch::Receiver<Option<PlaybackSeek>>,
     pub location: watch::Receiver<(u64, String)>,
     pub status: watch::Receiver<VehicleStatus>,
 }
@@ -84,6 +94,7 @@ pub struct VehicleFeed {
 impl Default for Vehicle {
     fn default() -> Self {
         Self {
+            seek: watch::Sender::new(None),
             location: watch::Sender::new((0, String::new())),
             status: watch::Sender::new(VehicleStatus::default()),
         }
@@ -93,9 +104,20 @@ impl Default for Vehicle {
 impl Vehicle {
     pub fn feed(&self) -> VehicleFeed {
         VehicleFeed {
+            seek: self.seek.subscribe(),
             location: self.location.subscribe(),
             status: self.status.subscribe(),
         }
+    }
+
+    pub fn push_seek(&self, arg: &str) -> Result<(), String> {
+        let v: serde_json::Value = serde_json::from_str(arg).map_err(|e| e.to_string())?;
+        let phone_id=v["phoneId"].as_str().filter(|s| !s.is_empty()).ok_or("seek requires phoneId")?.to_string();
+        let position_ms=u32::try_from(v["positionMs"].as_u64().ok_or("seek requires positionMs")?).map_err(|_| "seek position too large")?;
+        let request_id=v["requestId"].as_str().ok_or("seek requires requestId")?.to_string();
+        let track_id=v["trackId"].as_str().map(str::to_string);
+        self.seek.send_replace(Some(PlaybackSeek {phone_id,position_ms,request_id,track_id}));
+        Ok(())
     }
 
     /// `location <base64 nmea>`

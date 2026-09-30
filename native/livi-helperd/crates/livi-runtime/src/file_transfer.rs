@@ -13,7 +13,7 @@ const SUCCESS: u8 = 0x05;
 
 pub enum FtOutput {
     Reply(Vec<u8>),
-    Complete(Vec<u8>),
+    Complete(u8, Vec<u8>),
 }
 
 #[derive(Default)]
@@ -58,7 +58,7 @@ impl FileTransferReceiver {
 
     fn complete(&mut self, ftid: u8, data: Vec<u8>) -> Vec<FtOutput> {
         self.buffers.remove(&ftid);
-        vec![FtOutput::Reply(vec![ftid, SUCCESS]), FtOutput::Complete(data)]
+        vec![FtOutput::Reply(vec![ftid, SUCCESS]), FtOutput::Complete(ftid, data)]
     }
 }
 
@@ -71,7 +71,7 @@ mod tests {
         let mut r = FileTransferReceiver::default();
         let out = r.feed(&[7, FIRST_AND_ONLY_DATA, 0xAA, 0xBB]);
         assert!(matches!(out[0], FtOutput::Reply(ref b) if b == &[7, SUCCESS]));
-        assert!(matches!(&out[1], FtOutput::Complete(d) if d == &[0xAA, 0xBB]));
+        assert!(matches!(&out[1], FtOutput::Complete(7,d) if d == &[0xAA, 0xBB]));
     }
 
     #[test]
@@ -81,6 +81,6 @@ mod tests {
         assert!(r.feed(&[3, FIRST_DATA, 1, 2]).is_empty());
         assert!(r.feed(&[3, DATA, 3, 4]).is_empty());
         let out = r.feed(&[3, LAST_DATA, 5]);
-        assert!(matches!(&out[1], FtOutput::Complete(d) if d == &[1, 2, 3, 4, 5]));
+        assert!(matches!(&out[1], FtOutput::Complete(3,d) if d == &[1, 2, 3, 4, 5]));
     }
 }

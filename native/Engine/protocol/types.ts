@@ -48,6 +48,7 @@ export interface CpStreamProfile extends CpAudioProfile {
 }
 
 export interface CpStackConfig {
+  audioVolume?: (audioType:number)=>number
   /** Name shown as the car on the phone. */
   deviceName: string
   /** Accessory identity = the WiFi AP interface MAC (BSSID). */
@@ -82,6 +83,7 @@ export interface CpStackConfig {
   icons: CpIcon[]
   /** True for a right-hand-drive car, so the phone mirrors the CarPlay dock. */
   rightHandDrive: boolean
+  /** Current host day/night appearance, advertised in /info as well as live updates. */
 }
 
 /** One CarPlay homescreen icon variant (PNG bytes at a given pixel size). */

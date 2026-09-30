@@ -28,10 +28,29 @@ pub const SOCK_PATH: &str = "/tmp/cp-bt.sock";
 pub struct Broadcaster {
     subs: Arc<Mutex<Vec<mpsc::UnboundedSender<String>>>>,
     joined: Arc<Notify>,
+    latest: Arc<Mutex<Vec<serde_json::Value>>>,
 }
 
 impl Broadcaster {
     pub fn push_json(&self, line: String) {
+        if let Ok(mut event)=serde_json::from_str::<serde_json::Value>(&line) {
+            if matches!(event["type"].as_str(),Some("nowplaying"|"albumart")) {
+                let mut cache=self.latest.lock().unwrap();
+                if let Some(index)=cache.iter().position(|old| old["type"]==event["type"] && old["phoneId"]==event["phoneId"] && (event["type"]=="nowplaying" || old["artworkId"]==event["artworkId"])) {
+                    let old=cache.remove(index);
+                    if event["type"]=="nowplaying" && (event["appId"].is_null() || event["appId"]==old["appId"]) {
+                        for key in ["canSeek","playing","playbackRate","appId","appName"] {
+                            if event[key].is_null() && !old[key].is_null() {event[key]=old[key].clone();}
+                        }
+                    }
+                    if event["type"]=="nowplaying" && (event["trackId"].is_null() || event["trackId"]==old["trackId"]) {
+                        if let (Some(previous),Some(next))=(old.as_object(),event.as_object_mut()) {for (key,value) in previous {next.entry(key.clone()).or_insert_with(||value.clone());}}
+                    }
+                }
+                cache.push(event);
+                if cache.len()>16 {cache.remove(0);}
+            }
+        }
         self.subs
             .lock()
             .unwrap()
@@ -40,7 +59,10 @@ impl Broadcaster {
 
     pub fn subscribe(&self) -> mpsc::UnboundedReceiver<String> {
         let (tx, rx) = mpsc::unbounded_channel();
+        let cache=self.latest.lock().unwrap();
+        for event in cache.iter() {let _=tx.send(event.to_string());}
         self.subs.lock().unwrap().push(tx);
+        drop(cache);
         self.joined.notify_waiters();
         rx
     }
@@ -243,6 +265,10 @@ where
         }
         // Profiles are registered at startup and stay up; the toggles are accepted no-ops.
         "set-cp" | "set-aa" => reply(&mut stream, "{\"ok\":true}").await,
+        "seek" => {
+            let json=match state.vehicle().push_seek(arg) {Ok(())=>"{\"ok\":true}".to_string(),Err(e)=>err_json(&e)};
+            reply(&mut stream,&json).await
+        }
         "location" => {
             let json = match state.vehicle().push_location(arg) {
                 Ok(()) => "{\"ok\":true}".to_string(),
@@ -360,14 +386,14 @@ pub async fn pump_artwork(
     bcast: Broadcaster,
     ident: SharedTag,
 ) {
-    while let Some(data) = art_rx.recv().await {
+    while let Some(artwork) = art_rx.recv().await {
+        let crate::driver::Artwork{id,data,track_id}=artwork;
         if data.is_empty() {
             continue;
         }
-        let json = format!(
-            "{{\"type\":\"albumart\",\"dataB64\":\"{}\"}}",
-            STANDARD.encode(&data)
-        );
+        let mut event=serde_json::json!({"type":"albumart","artworkId":id,"dataB64":STANDARD.encode(&data)});
+        if let Some(track)=track_id {event["trackId"]=serde_json::Value::String(track);}
+        let json=event.to_string();
         bcast.push_json(ident.lock().unwrap().apply(json));
     }
 }
@@ -419,6 +445,10 @@ pub async fn pump_events_for(
                     bcast.push_json(json);
                 }
             }
+            BringupEvent::SeekResult {request_id,position_ms,sent} => {
+                let json=serde_json::json!({"type":"seekResult","requestId":request_id,"positionMs":position_ms,"sent":sent}).to_string();
+                bcast.push_json(ident.lock().unwrap().apply(json));
+            }
             BringupEvent::Failed(e) => eprintln!("[cp-sock] {tag} bring-up failed: {e}"),
             BringupEvent::Identified => println!("[cp] {tag}: identification accepted"),
             BringupEvent::Authenticated => println!("[cp] {tag}: MFi auth succeeded"),
@@ -444,4 +474,24 @@ async fn device_disconnect(bus: &zbus::Connection, adapter: &str, mac: &str) -> 
     .await
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod metadata_cache_tests {
+    use super::*;
+    #[test]
+    fn late_subscriber_gets_cover_and_merged_playback() {
+        let bus=Broadcaster::default();
+        bus.push_json(r#"{"type":"nowplaying","phoneId":"A","trackId":"1","title":"Song","canSeek":true,"elapsedMs":1000}"#.into());
+        bus.push_json(r#"{"type":"albumart","phoneId":"A","artworkId":7,"trackId":"1","dataB64":"AA=="}"#.into());
+        bus.push_json(r#"{"type":"nowplaying","phoneId":"A","elapsedMs":2000}"#.into());
+        let mut rx=bus.subscribe();
+        let cover:serde_json::Value=serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        let metadata:serde_json::Value=serde_json::from_str(&rx.try_recv().unwrap()).unwrap();
+        assert_eq!(cover["type"],"albumart");assert_eq!(metadata["title"],"Song");assert_eq!(metadata["elapsedMs"],2000);
+        bus.push_json(r#"{"type":"nowplaying","phoneId":"A","trackId":"2","title":"Next"}"#.into());
+        let mut late=bus.subscribe();late.try_recv().unwrap();
+        let next:serde_json::Value=serde_json::from_str(&late.try_recv().unwrap()).unwrap();
+        assert!(next["elapsedMs"].is_null());assert_eq!(next["canSeek"],true);
+    }
 }

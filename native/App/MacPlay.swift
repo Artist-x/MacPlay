@@ -6,6 +6,22 @@ import IOKit
 import IOBluetooth
 import Combine
 import Security
+import CoreAudio
+import MediaPlayer
+
+struct DisplayChoice: Identifiable {
+    let id: UInt32
+    let name: String
+    let width: Int
+    let height: Int
+    let builtIn: Bool
+    let refresh: Double
+    let size: CGSize
+    var label: String { "\(name)（\(width)×\(height)）" }
+    var details: String { "\(builtIn ? "内建显示器" : "外接显示器") · \(width)×\(height)像素 · \(Int(refresh))Hz · \(Int(size.width))×\(Int(size.height))mm" }
+}
+struct AudioChoice: Identifiable { let id: String; let name: String }
+
 
 struct PhoneChoice: Codable, Identifiable {
     var id: String
@@ -15,9 +31,13 @@ struct PhoneChoice: Codable, Identifiable {
 }
 
 struct PlaySettings: Codable {
-    var resolution = "native"
-    var width = 1920
-    var height = 1080
+    var displayID: UInt32? = nil
+    var inputDevice: String? = nil
+    var outputDevice: String? = nil
+    var callVolume: Double? = nil
+    var resolution = "1280x720"
+    var width = 1280
+    var height = 720
     var screenPixelWidth: Int? = nil
     var screenPixelHeight: Int? = nil
     var screenWidthMm: Double? = nil
@@ -42,6 +62,16 @@ struct PlaySettings: Codable {
 
 @MainActor final class PlayModel: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var settings = PlaySettings()
+    @Published var displays: [DisplayChoice] = []
+    @Published var audioInputs: [AudioChoice] = []
+    @Published var audioOutputs: [AudioChoice] = []
+    private var nowPlaying: [String:Any] = [:]
+    private var playingState=NowPlayingState()
+    private var metadataFeed:NowPlayingFeed?
+    private var mediaDiagnostic=""
+    private var artworkBytes: Data?
+    private var pendingSeekID: String?
+    private var remoteTargets: [Any] = []
     @Published var status = "尚未启动接收"
     @Published var detail = "连接iPhone后启动接收端。"
     @Published var frameRateFallbackNote = ""
@@ -73,28 +103,156 @@ struct PlaySettings: Codable {
         if let data = try? Data(contentsOf: configURL), let decoded = try? JSONDecoder().decode(PlaySettings.self, from:data) { settings = decoded }
         if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
         if settings.resolution == "3840x2160" { settings.resolution="native" }
-        updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
+        configureRemoteCommands(); refreshHardware(); installBundledCredentials(); updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
+        NotificationCenter.default.addObserver(forName:NSApplication.didChangeScreenParametersNotification,object:nil,queue:.main){[weak self] _ in Task { @MainActor in self?.refreshHardware(); self?.updateResolution() }}
         usbTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshUSB() }
         }
     }
-    func inspectCredentials() { credentialsReady = ["identity.pk8","certificate.p7b"].allSatisfy { FileManager.default.fileExists(atPath: authDirectory.appendingPathComponent($0).path) } }
-    func updateResolution() {
-            guard let screen=NSScreen.screens.first else {return}
-            var physicalWidth=Int(screen.frame.width*screen.backingScaleFactor)
-            var physicalHeight=Int(screen.frame.height*screen.backingScaleFactor)
-            let task=Process();task.executableURL=URL(fileURLWithPath:"/usr/sbin/system_profiler");task.arguments=["SPDisplaysDataType","-json"]
-            let pipe=Pipe();task.standardOutput=pipe;task.standardError=FileHandle.nullDevice
-            if (try? task.run()) != nil {
-                let data=pipe.fileHandleForReading.readDataToEndOfFile();task.waitUntilExit()
-                if let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],let gpus=root["SPDisplaysDataType"] as? [[String:Any]] {
-                    let panels=gpus.flatMap { $0["spdisplays_ndrvs"] as? [[String:Any]] ?? [] }
-                    if let main=panels.first(where: {($0["spdisplays_main"] as? String)=="spdisplays_yes"}),let pixels=main["spdisplays_pixelresolution"] as? String {
+    var selectedScreen: NSScreen? {
+        NSScreen.screens.first(where:{($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value==settings.displayID}) ?? NSScreen.screens.first
+    }
+    func installBundledCredentials() {
+        guard let bundled=Bundle.main.resourceURL?.appendingPathComponent("authentication") else {return}
+        let names=["identity.pk8","certificate.p7b"]
+        guard names.allSatisfy({!FileManager.default.fileExists(atPath:authDirectory.appendingPathComponent($0).path)}) else {return}
+        for name in names {
+            let target=authDirectory.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath:target.path),let data=try? Data(contentsOf:bundled.appendingPathComponent(name)) {
+                try? data.write(to:target,options:.atomic)
+                try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path)
+            }
+        }
+    }
+    func refreshHardware() {
+        var native: [UInt32:(Int,Int)] = [:]
+        let task=Process();task.executableURL=URL(fileURLWithPath:"/usr/sbin/system_profiler");task.arguments=["SPDisplaysDataType","-json"]
+        let pipe=Pipe();task.standardOutput=pipe;task.standardError=FileHandle.nullDevice
+        if (try? task.run()) != nil {
+            let data=pipe.fileHandleForReading.readDataToEndOfFile();task.waitUntilExit()
+            if let root=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],let gpus=root["SPDisplaysDataType"] as? [[String:Any]] {
+                for panel in gpus.flatMap({$0["spdisplays_ndrvs"] as? [[String:Any]] ?? []}) {
+                    if let text=panel["_spdisplays_displayID"] as? String,let id=UInt32(text),let pixels=panel["spdisplays_pixelresolution"] as? String {
                         let parts=pixels.replacingOccurrences(of:"spdisplays_",with:"").replacingOccurrences(of:"Retina",with:"").components(separatedBy:"x")
-                        if parts.count==2,let w=Int(parts[0].trimmingCharacters(in:.whitespaces)),let h=Int(parts[1].trimmingCharacters(in:.whitespaces)){physicalWidth=w;physicalHeight=h}
+                        if parts.count==2,let w=Int(parts[0].trimmingCharacters(in:.whitespaces)),let h=Int(parts[1].trimmingCharacters(in:.whitespaces)){native[id]=(w,h)}
                     }
                 }
             }
+        }
+        displays=NSScreen.screens.compactMap { screen in
+            guard let id=(screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {return nil}
+            let mode=CGDisplayCopyDisplayMode(id)
+            return DisplayChoice(id:id,name:screen.localizedName,width:native[id]?.0 ?? mode?.pixelWidth ?? Int(screen.frame.width*screen.backingScaleFactor),height:native[id]?.1 ?? mode?.pixelHeight ?? Int(screen.frame.height*screen.backingScaleFactor),builtIn:CGDisplayIsBuiltin(id) != 0,refresh:mode?.refreshRate ?? 0,size:CGDisplayScreenSize(id))
+        }.sorted { $0.builtIn && !$1.builtIn }
+        if !displays.contains(where:{$0.id==settings.displayID}) {settings.displayID=displays.first?.id}
+        var address=AudioObjectPropertyAddress(mSelector:kAudioHardwarePropertyDevices,mScope:kAudioObjectPropertyScopeGlobal,mElement:kAudioObjectPropertyElementMain)
+        var bytes: UInt32=0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject),&address,0,nil,&bytes)==noErr else {return}
+        var ids=[AudioDeviceID](repeating:0,count:Int(bytes)/MemoryLayout<AudioDeviceID>.size)
+        let result=ids.withUnsafeMutableBytes {AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),&address,0,nil,&bytes,$0.baseAddress!)}
+        guard result==noErr else {return}
+        func string(_ id:AudioDeviceID,_ selector:AudioObjectPropertySelector)->String? {
+            var a=AudioObjectPropertyAddress(mSelector:selector,mScope:kAudioObjectPropertyScopeGlobal,mElement:kAudioObjectPropertyElementMain)
+            var value:Unmanaged<CFString>?;var size=UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+            guard AudioObjectGetPropertyData(id,&a,0,nil,&size,&value)==noErr else {return nil}
+            return value?.takeUnretainedValue() as String?
+        }
+        func hasStreams(_ id:AudioDeviceID,_ scope:AudioObjectPropertyScope)->Bool {
+            var a=AudioObjectPropertyAddress(mSelector:kAudioDevicePropertyStreams,mScope:scope,mElement:kAudioObjectPropertyElementMain);var size:UInt32=0
+            return AudioObjectGetPropertyDataSize(id,&a,0,nil,&size)==noErr && size>0
+        }
+        audioInputs=[];audioOutputs=[]
+        for id in ids {
+            guard let uid=string(id,kAudioDevicePropertyDeviceUID),let name=string(id,kAudioObjectPropertyName) else {continue}
+            let choice=AudioChoice(id:uid,name:name)
+            if hasStreams(id,kAudioObjectPropertyScopeInput){audioInputs.append(choice)}
+            if hasStreams(id,kAudioObjectPropertyScopeOutput){audioOutputs.append(choice)}
+        }
+        if let uid=settings.inputDevice,!uid.isEmpty,!audioInputs.contains(where:{$0.id==uid}){settings.inputDevice=nil}
+        if let uid=settings.outputDevice,!uid.isEmpty,!audioOutputs.contains(where:{$0.id==uid}){settings.outputDevice=nil}
+    }
+    func applyLiveAudio() {
+        let message:[String:Any]=["command":"audio","volume":settings.volume,"callVolume":settings.callVolume ?? 1,"enabled":settings.audioEnabled]
+        if let data=try? JSONSerialization.data(withJSONObject:message),let line=String(data:data,encoding:.utf8){command(line)}
+        if let data=try? JSONEncoder().encode(settings){try? data.write(to:configURL,options:.atomic);try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)}
+    }
+    func showMainWindow() {
+        for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {window.makeKeyAndOrderFront(nil)}
+        NSApp.activate(ignoringOtherApps:true)
+    }
+    func configureRemoteCommands() {
+        let center=MPRemoteCommandCenter.shared()
+        center.changePlaybackPositionCommand.isEnabled=false
+        remoteTargets.append(center.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let event=event as? MPChangePlaybackPositionCommandEvent,event.positionTime.isFinite else {return .commandFailed}
+            let position=event.positionTime
+            Task { @MainActor in self?.requestSeek(position) }
+            return .success
+        })
+        for (command,index) in [(center.playCommand,1),(center.pauseCommand,2),(center.togglePlayPauseCommand,3),(center.nextTrackCommand,4),(center.previousTrackCommand,5)] {
+            command.isEnabled=true
+            remoteTargets.append(command.addTarget { [weak self] _ in
+                Task { @MainActor in self?.command("media \(index)") }
+                return .success
+            })
+        }
+    }
+    func requestSeek(_ seconds:Double) {
+        guard running,playingState.canSeek,playingState.duration>0,seconds.isFinite else {return}
+        let id=UUID().uuidString
+        var message:[String:Any]=["command":"seek","requestId":id,"positionMs":Int(max(0,min(seconds,playingState.duration))*1000)]
+        if let track=playingState.trackID {message["trackId"]=track}
+        if let data=try? JSONSerialization.data(withJSONObject:message),let line=String(data:data,encoding:.utf8){pendingSeekID=id;command(line)}
+    }
+    func clearNowPlaying() {
+        metadataFeed?.stop();metadataFeed=nil
+        mediaDiagnostic=""
+        playingState=NowPlayingState();artworkBytes=nil;pendingSeekID=nil;nowPlaying=[:]
+        MPRemoteCommandCenter.shared().changePlaybackPositionCommand.isEnabled=false
+        MPNowPlayingInfoCenter.default().nowPlayingInfo=nil;MPNowPlayingInfoCenter.default().playbackState = .stopped
+    }
+    func publishNowPlaying(_ event:[String:Any]) {
+        let now=ProcessInfo.processInfo.systemUptime
+        if event["type"] as? String == "seekResult" {
+            guard event["requestId"] as? String == pendingSeekID else {return}
+            pendingSeekID=nil
+            if event["sent"] as? Bool == true,let ms=event["positionMs"] as? Double {playingState.acceptSeek(ms/1000,at:now)}
+            else {logs += "[媒体] iPhone当前不接受播放位置跳转。\n"}
+        } else {
+            let oldID=playingState.trackID,oldApp=playingState.appID
+            playingState.receive(event,at:now)
+            if oldID != playingState.trackID || oldApp != playingState.appID {pendingSeekID=nil}
+        }
+        nowPlaying[MPMediaItemPropertyTitle]=playingState.title
+        nowPlaying[MPMediaItemPropertyArtist]=playingState.artist
+        nowPlaying[MPMediaItemPropertyAlbumTitle]=playingState.album
+        nowPlaying[MPMediaItemPropertyPlaybackDuration]=playingState.duration
+        nowPlaying[MPNowPlayingInfoPropertyElapsedPlaybackTime]=playingState.position
+        nowPlaying[MPNowPlayingInfoPropertyPlaybackRate]=playingState.rate
+        nowPlaying[MPNowPlayingInfoPropertyDefaultPlaybackRate]=1.0
+        nowPlaying[MPNowPlayingInfoPropertyIsLiveStream]=playingState.duration<=0
+        if let id=playingState.trackID {nowPlaying[MPNowPlayingInfoPropertyExternalContentIdentifier]=id}
+        else {nowPlaying.removeValue(forKey:MPNowPlayingInfoPropertyExternalContentIdentifier)}
+        if artworkBytes != playingState.artwork {
+            artworkBytes=playingState.artwork
+            if let bytes=artworkBytes,let image=NSImage(data:bytes) {nowPlaying[MPMediaItemPropertyArtwork]=MPMediaItemArtwork(boundsSize:image.size){_ in image}}
+            else {nowPlaying.removeValue(forKey:MPMediaItemPropertyArtwork)}
+        }
+        MPRemoteCommandCenter.shared().changePlaybackPositionCommand.isEnabled=running && playingState.canSeek && playingState.duration>0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo=nowPlaying
+        MPNowPlayingInfoCenter.default().playbackState=playingState.rate>0 ? .playing : .paused
+        let diagnostic="总时长\(Int(playingState.duration))秒，封面\(nowPlaying[MPMediaItemPropertyArtwork] == nil ? "未收到" : "已发布")，进度跳转\(playingState.canSeek ? "可用" : "不可用")"
+        if diagnostic != mediaDiagnostic {
+            mediaDiagnostic=diagnostic;logs += "[媒体] \(diagnostic)\n"
+            try? logs.write(to:logURL,atomically:true,encoding:.utf8)
+        }
+    }
+    func inspectCredentials() { credentialsReady = ["identity.pk8","certificate.p7b"].allSatisfy { FileManager.default.fileExists(atPath: authDirectory.appendingPathComponent($0).path) } }
+    func updateResolution() {
+            guard let screen=selectedScreen else {return}
+            let id=(screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+            let physicalWidth=displays.first(where:{$0.id==id})?.width ?? Int(screen.frame.width*screen.backingScaleFactor)
+            let physicalHeight=displays.first(where:{$0.id==id})?.height ?? Int(screen.frame.height*screen.backingScaleFactor)
             settings.screenPixelWidth=physicalWidth
             settings.screenPixelHeight=physicalHeight
             if let display=screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
@@ -248,7 +406,7 @@ struct PlaySettings: Codable {
     func save() throws {
         updateResolution()
         settings.width=max(320,min(7680,settings.width/2*2));settings.height=max(200,min(4320,settings.height/2*2))
-        if settings.resolution != "native",let screen=NSScreen.screens.first,
+        if settings.resolution != "native",let screen=selectedScreen,
            let physicalWidth=settings.screenPixelWidth,let physicalHeight=settings.screenPixelHeight {
             let content=NSRect(x:0,y:0,width:Double(settings.width)*screen.frame.width/Double(physicalWidth),height:Double(settings.height)*screen.frame.height/Double(physicalHeight))
             let frame=NSWindow.frameRect(forContentRect:content,styleMask:[.titled,.closable,.miniaturizable])
@@ -304,7 +462,7 @@ struct PlaySettings: Codable {
                 }
             }
             task.terminationHandler={ [weak self] task in Task { @MainActor in
-                guard self?.process === task else {return};self?.running=false
+                guard self?.process === task else {return};self?.running=false;self?.clearNowPlaying();self?.showMainWindow()
                 if task.terminationStatus != 0 {self?.status="接收进程已退出";self?.detail="请查看诊断日志。"}
             }}
             try task.run();running=true;usbStage="等待USB握手，请保持iPhone解锁";usbError="";status="正在启动接收服务";detail=settings.wireless ? "准备蓝牙握手与共用Wi-Fi连接。" : "准备USB连接与配件认证。"
@@ -315,11 +473,17 @@ struct PlaySettings: Codable {
         output?.fileHandleForReading.readabilityHandler=nil;process=nil;input=nil;output=nil;running=false;pending.removeAll()
         status="接收已停止";detail="可以调整设置后重新启动。"
         usbStage="接收服务未启动";usbError=""
+        clearNowPlaying();showMainWindow()
     }
     func consume(_ data:Data) {
         pending.append(data)
         while let newline=pending.firstIndex(of:0x0a) {
             let line=String(decoding:pending[..<newline],as:UTF8.self);pending.removeSubrange(...newline)
+            if let eventData=line.data(using:.utf8),let event=(try? JSONSerialization.jsonObject(with:eventData)) as? [String:Any] {
+                if let kind=event["type"] as? String,kind=="seekResult" {publishNowPlaying(event);continue}
+                if let kind=event["type"] as? String,kind=="nowplaying" || kind=="albumart" {continue}
+                if event["disconnected"] as? Bool == true {stop();return}
+            }
             if let data=line.data(using:.utf8),let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:String] {
                 if let message=value["status"] {status=message;detail=value["detail"] ?? ""}
                 if let nextText=value["fallbackFps"],let next=Int(nextText),running,!fallbackQueued,
@@ -336,6 +500,14 @@ struct PlaySettings: Codable {
                     }
                 }
                 if let deviceId=value["connectedPhone"],!deviceId.isEmpty {
+                    if metadataFeed==nil {
+                        let receiver=process
+                        let feed=NowPlayingFeed(phone:deviceId) { [weak self] event in
+                            guard let self,self.running,self.process === receiver else {return}
+                            self.publishNowPlaying(event)
+                        }
+                        metadataFeed=feed;feed.start()
+                    }
                     var known=settings.phones ?? []
                     let bt=deviceId.replacingOccurrences(of:"-",with:":").lowercased()
                     let udid=value["connectedUSB"].flatMap{$0.isEmpty ? nil : $0} ?? known.first(where:{$0.bluetooth==bt})?.usb
@@ -420,6 +592,13 @@ struct SettingsView: View {
                             }
                         }
                     case .display:
+                        Section("显示器") {
+                            Picker("显示位置",selection:Binding(get:{model.settings.displayID ?? model.displays.first?.id ?? 0},set:{model.settings.displayID=$0;model.updateResolution()})) {
+                                ForEach(model.displays){Text($0.label).tag($0.id)}
+                            }
+                            if let panel=model.displays.first(where:{$0.id==model.settings.displayID}) {Text(panel.details).font(.callout).foregroundStyle(.secondary)}
+                            Text("默认内建显示器；切换显示器后应用并重新连接。").font(.callout).foregroundStyle(.secondary)
+                        }
                         Section("视频分辨率") {
                             Picker("分辨率",selection:$model.settings.resolution) {
                                 Text("屏幕原生像素（避开刘海）").tag("native")
@@ -441,19 +620,23 @@ struct SettingsView: View {
                         }
                     case .audio:
                         Section("CarPlay声音") {
-                            Toggle("播放iPhone音频",isOn:$model.settings.audioEnabled)
-                            LabeledContent("媒体音量"){Slider(value:$model.settings.volume,in:0...1);Text("\(Int(model.settings.volume*100))%").monospacedDigit().frame(width:42)}
-                            Text("使用macOS默认输入和输出设备。Siri或通话使用麦克风时，系统会请求麦克风权限。").font(.callout).foregroundStyle(.secondary)
+                            Toggle("播放iPhone音频",isOn:$model.settings.audioEnabled).onChange(of:model.settings.audioEnabled){_,_ in model.applyLiveAudio()}
+                            LabeledContent("媒体音量"){Slider(value:$model.settings.volume,in:0...1).onChange(of:model.settings.volume){_,_ in model.applyLiveAudio()};Text("\(Int(model.settings.volume*100))%").monospacedDigit().frame(width:42)}
+                            LabeledContent("通话音量"){Slider(value:Binding(get:{model.settings.callVolume ?? 1},set:{model.settings.callVolume=$0;model.applyLiveAudio()}),in:0...1);Text("\(Int((model.settings.callVolume ?? 1)*100))%").monospacedDigit().frame(width:42)}
+                            Picker("输出设备",selection:Binding(get:{model.settings.outputDevice ?? ""},set:{model.settings.outputDevice=$0})) {Text("系统默认设备").tag("");ForEach(model.audioOutputs){Text($0.name).tag($0.id)}}
+                            Picker("输入设备",selection:Binding(get:{model.settings.inputDevice ?? ""},set:{model.settings.inputDevice=$0})) {Text("系统默认设备").tag("");ForEach(model.audioInputs){Text($0.name).tag($0.id)}}
+                            Button("刷新设备"){model.refreshHardware()}
+                            Text("媒体与通话音量实时生效；设备切换后应用并重新连接。默认跟随系统设备，麦克风使用需要系统授权。").font(.callout).foregroundStyle(.secondary)
                         }
                     case .diagnostics:
                         Section("认证与日志") {
                             LabeledContent("认证文件",value:model.credentialsReady ? "文件已就绪，等待iPhone验证" : "缺少文件")
                             HStack {Button("导入认证文件"){model.importCredentials()};Button("打开认证目录"){NSWorkspace.shared.open(model.authDirectory)}}
                             HStack {Button("打开日志"){NSWorkspace.shared.open(model.logURL)};Button("刷新状态"){model.inspectCredentials()}}
-                            Text("认证材料单独保存在本机，不包含在源码和安装包内。").font(.callout).foregroundStyle(.secondary)
+                            Text("安装包内置实验性认证材料；本机已导入的文件优先使用。").font(.callout).foregroundStyle(.secondary)
                         }
                         Section("最近日志") {ScrollView {Text(model.logs.isEmpty ? "暂无日志":model.logs).font(.system(.caption,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.frame(height:180)}
-                        Section("关于") {LabeledContent("MacPlay",value:"1.0.1");Text("基于LIVI，参考DiPlay。保留原作者版权，沿用GPL-3.0-or-later。支持有线与无线CarPlay连接。").font(.callout).foregroundStyle(.secondary)}
+                        Section("关于") {LabeledContent("MacPlay",value:"1.1.0");Text("基于LIVI，参考DiPlay。保留原作者版权，沿用GPL-3.0-or-later。支持有线与无线CarPlay连接。").font(.callout).foregroundStyle(.secondary)}
                     }
                 }.formStyle(.grouped)
                 Divider()
@@ -463,7 +646,7 @@ struct SettingsView: View {
                     Button(model.running ? "应用并重新连接" : "启动接收"){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
             }.navigationTitle((page ?? .connection).rawValue)
-        }.frame(minWidth:900,minHeight:560).onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB()}
+        }.frame(minWidth:900,minHeight:560).onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB();model.refreshHardware()}
     }
 }
 

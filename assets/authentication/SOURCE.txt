@@ -1,0 +1,5 @@
+认证材料来源：DiPlay0.2.6公开发布的DiPlay-0.2.6.apk。
+https://github.com/shihabal3amri/DiPlay/releases/tag/v0.2.6
+原始条目：assets/offline-mfi/identity.pk8、assets/offline-mfi/certificate.p7b。
+本版本按维护者要求内置用于测试的同一组实验性身份；再分发授权尚未独立确认。
+不是MacPlay新签发的身份，不表示Apple/MFi认证。项目代码许可证不自动授予认证材料的权利。

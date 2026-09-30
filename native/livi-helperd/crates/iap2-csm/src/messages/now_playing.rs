@@ -28,6 +28,8 @@ csm_group! {
         0 => status: [flag],
         1 => elapsed_ms: [flag],
         7 => app_name: [flag],
+        12 => playback_speed: [flag],
+        13 => set_elapsed_available: [flag],
         16 => app_bundle_id: [flag],
     }
 }
@@ -57,6 +59,8 @@ csm_group! {
         0 => status: [opt enum PlaybackStatus],
         1 => elapsed_ms: [opt u32],
         7 => app_name: [opt str],
+        12 => playback_speed: [opt u16],
+        13 => set_elapsed_available: [opt bytes],
         16 => app_bundle_id: [opt str],
     }
 }
@@ -70,4 +74,27 @@ csm_message! {
 
 csm_message! {
     pub struct StopNowPlayingUpdates = 0x5002 {}
+}
+
+impl PlaybackAttributes {
+    pub fn can_seek(&self) -> Option<bool> {
+        self.set_elapsed_available.as_ref().map(|value| value.is_empty() || value == &[1])
+    }
+}
+
+csm_message! {
+    pub struct SetNowPlayingInformation = 0x5003 {
+        0 => elapsed_ms: [opt u32],
+    }
+}
+
+#[cfg(test)]
+mod seek_tests {
+    use super::*;
+    use crate::CsmMessage;
+    #[test]
+    fn absolute_seek_encodes_milliseconds() {
+        assert_eq!(SetNowPlayingInformation { elapsed_ms: Some(42000) }.encode(),
+            vec![0x40,0x40,0,14,0x50,3,0,8,0,0,0,0,0xA4,0x10]);
+    }
 }

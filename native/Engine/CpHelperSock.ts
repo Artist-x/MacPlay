@@ -108,6 +108,11 @@ export class CpHelperSock implements MfiSigner {
     if (!res.ok) throw new CpHelperSockError(res.error)
   }
 
+  async seekPlayback(phoneId: string, positionMs: number, requestId: string, trackId?: string): Promise<void> {
+    const response = await this.request(`seek ${JSON.stringify({phoneId, positionMs, requestId, trackId})}`)
+    if (!response.ok) throw new CpHelperSockError(response.error)
+  }
+
   /** Ends the wired iAP2 sessions, so the phones open them again. */
   async dropIap2(): Promise<void> {
     const res = await this.request('drop-iap2')

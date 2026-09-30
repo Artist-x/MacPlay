@@ -22,7 +22,7 @@ export function openScreenReceiver(id:number,key:Buffer):number {
   onVideo?.()
  })
 }
-export function closeScreenReceiver(id:number) { addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} }
+export function closeScreenReceiver(id:number) { addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} addon.macplayCloseVideoWindow() }
 export function onAudioReceiverStarted(cb:(id:number,sample:number)=>void) {started=cb}
 export function openAudioReceiver(key:Buffer,o:any):any {
  return addon.openAudioReceiver(key,o.codec,o.payloadType,o.clockRate,o.channels,o.latencyMs,o.realtime,o.device,(id:number,sample:number)=>started?.(id,sample))

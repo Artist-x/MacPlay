@@ -214,6 +214,8 @@ fn now_playing(frame: &[u8]) -> Option<String> {
     let m = NowPlayingUpdate::decode(frame).ok()?;
     let mut o = Obj::new("nowplaying");
     if let Some(mi) = m.media_item_attributes {
+        if let Some(id)=mi.persistent_id {o.str("trackId", &id.to_string());}
+        if let Some(id)=mi.artwork_ftid {o.num("artworkId", id);}
         if let Some(t) = mi.title {
             o.str("title", &t);
         }
@@ -228,11 +230,15 @@ fn now_playing(frame: &[u8]) -> Option<String> {
         }
     }
     if let Some(pb) = m.playback_attributes {
+        if let Some(available)=pb.can_seek() {o.bool("canSeek",available);}
+        if let Some(speed)=pb.playback_speed {o.num("playbackRate", f64::from(speed)/100.0);}
+        if let Some(app)=&pb.app_bundle_id {o.str("appId",app);}
         if let Some(s) = pb.status {
-            o.num("playing", if s == PlaybackStatus::Playing { 1 } else { 0 });
+            o.num("playing", if matches!(s, PlaybackStatus::Playing | PlaybackStatus::SeekForward | PlaybackStatus::SeekBackward) { 1 } else { 0 });
         }
         if let Some(e) = pb.elapsed_ms {
             o.num("elapsedMs", e);
+            if let Ok(now)=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {o.num("elapsedAtMs",now.as_millis());}
         }
         if let Some(n) = pb.app_name {
             o.str("appName", &n);
@@ -390,6 +396,8 @@ mod tests {
             playback_attributes: Some(PlaybackAttributes {
                 status: Some(PlaybackStatus::Playing),
                 elapsed_ms: Some(42000),
+                playback_speed: Some(100),
+                set_elapsed_available: Some(vec![1]),
                 app_name: Some("Music".into()),
                 app_bundle_id: None,
             }),

@@ -86,7 +86,8 @@ async fn full_bringup_sequence() {
     let (accessory, mut phone) = pair();
     let (tx, mut rx) = mpsc::channel(32);
     let auth = MockAuth { cert: vec![0xDE, 0xAD, 0xBE, 0xEF] };
-    let handle = tokio::spawn(run_accessory(accessory, auth, identity(), cp_config(), tx, VehicleFeed::quiet()));
+    let vehicle=Vehicle::default();
+    let handle = tokio::spawn(run_accessory(accessory, auth, identity(), cp_config(), tx, vehicle.feed()));
 
     phone.send(StartIdentification {}.encode()).await.unwrap();
     let ident_frame = phone.expect(0x1D01).await;
@@ -119,11 +120,15 @@ async fn full_bringup_sequence() {
     }
     assert_eq!(rx.recv().await, Some(BringupEvent::Subscribed));
 
+    phone.send(iap2_csm::messages::car_play::DeviceTransportIdentifierNotification {
+        bluetooth_transport_id: "AA:BB:CC:DD:EE:FF".into(),usb_transport_id:String::new()
+    }.encode()).await.unwrap();
+    assert!(matches!(rx.recv().await,Some(BringupEvent::Incoming {msg_id:0x4E0E,..})));
     phone
         .send(
             NowPlayingUpdate {
                 media_item_attributes: Some(MediaItemAttributes {
-                    persistent_id: None,
+                    persistent_id: Some(9),
                     title: Some("Song".into()),
                     duration_ms: Some(180000),
                     album: None,
@@ -132,7 +137,10 @@ async fn full_bringup_sequence() {
                     genre: None,
                     artwork_ftid: None,
                 }),
-                playback_attributes: None,
+                playback_attributes: Some(PlaybackAttributes {
+                    status:Some(PlaybackStatus::Playing),elapsed_ms:Some(1000),app_name:None,app_bundle_id:None,
+                    playback_speed:Some(100),set_elapsed_available:Some(Vec::new()),
+                }),
             }
             .encode(),
         )
@@ -143,6 +151,12 @@ async fn full_bringup_sequence() {
         other => panic!("expected incoming 0x5001, got {other:?}"),
     }
 
+    vehicle.push_seek(r#"{"phoneId":"AA:BB:CC:DD:EE:FF","positionMs":42000,"requestId":"seek-test","trackId":"9"}"#).unwrap();
+    let frame=tokio::time::timeout(std::time::Duration::from_secs(1),phone.expect(0x5003)).await.unwrap();
+    assert_eq!(SetNowPlayingInformation::decode(&frame).unwrap().elapsed_ms,Some(42000));
+    assert_eq!(rx.recv().await,Some(BringupEvent::SeekResult {request_id:"seek-test".into(),position_ms:42000,sent:true}));
+    vehicle.push_seek(r#"{"phoneId":"AA:BB:CC:DD:EE:FF","positionMs":42000,"requestId":"stale-track","trackId":"8"}"#).unwrap();
+    assert_eq!(rx.recv().await,Some(BringupEvent::SeekResult {request_id:"stale-track".into(),position_ms:42000,sent:false}));
     drop(phone);
     assert_eq!(rx.recv().await, Some(BringupEvent::Closed));
     handle.await.unwrap();

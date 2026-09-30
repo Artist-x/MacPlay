@@ -18,7 +18,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>20</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>28</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
@@ -36,6 +36,8 @@ if [[ ! -d "$RES/gstreamer/macos-arm64" ]]; then cp -R assets/gstreamer/macos-ar
 cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
 mkdir -p "$RES/icons"
 cp assets/icons/carplay/macplay-256.png assets/icons/carplay/macplay-512.png "$RES/icons/"
+mkdir -p "$RES/authentication"
+cp assets/authentication/identity.pk8 assets/authentication/certificate.p7b assets/authentication/SOURCE.txt "$RES/authentication/"
 cp LICENSE NOTICE "$RES/"
 cp -R assets/licenses "$RES/ThirdParty-LICENSES"
 cp -R assets/gstreamer/LICENSES "$RES/GStreamer-LICENSES"
@@ -46,7 +48,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>20</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>28</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>
@@ -67,5 +69,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  ln -sfn /Applications build/dmg/Applications
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
- hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO dist/MacPlay-1.0.1-arm64.dmg
+ hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO dist/MacPlay-1.1.0-arm64.dmg
 fi

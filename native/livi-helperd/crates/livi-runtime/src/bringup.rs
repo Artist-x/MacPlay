@@ -55,6 +55,7 @@ pub enum BringupEvent {
     Incoming { msg_id: u16, frame: Vec<u8> },
     Failed(String),
     Closed,
+    SeekResult { request_id: String, position_ms: u32, sent: bool },
 }
 
 #[derive(Debug)]
@@ -80,7 +81,7 @@ fn subscriptions() -> Vec<Vec<u8>> {
     vec![
         StartNowPlayingUpdates {
             media_item_attributes: Some(StartMediaItemAttributes {
-                persistent_id: false,
+                persistent_id: true,
                 title: true,
                 duration_ms: true,
                 album: true,
@@ -93,7 +94,9 @@ fn subscriptions() -> Vec<Vec<u8>> {
                 status: true,
                 elapsed_ms: true,
                 app_name: true,
-                app_bundle_id: false,
+                playback_speed: true,
+                set_elapsed_available: true,
+                app_bundle_id: true,
             }),
         }
         .encode(),
@@ -390,6 +393,11 @@ pub async fn run_accessory<C: ControlChannel, A: AsyncAuth>(
     }
     let _ = events.send(BringupEvent::Subscribed).await;
 
+    let mut phone_tag=crate::events::EventTag::default();
+    let mut seek_feed_open=true;
+    let mut can_seek=false;
+    let mut track_id: Option<String>=None;
+    let mut duration: Option<u32>=None;
     let mut location_types = LocationTypes::default();
     let mut status_wanted = false;
     loop {
@@ -398,6 +406,18 @@ pub async fn run_accessory<C: ControlChannel, A: AsyncAuth>(
                 Some(frame) => frame,
                 None => break,
             },
+            changed = vehicle.seek.changed(), if seek_feed_open => {
+                if changed.is_err() { seek_feed_open=false; continue; }
+                let seek=vehicle.seek.borrow_and_update().clone();
+                if let Some(seek)=seek {
+                    if !phone_tag.phone_id.as_ref().is_some_and(|id| id.replace('-', ":").eq_ignore_ascii_case(&seek.phone_id.replace('-', ":"))) {continue;}
+                    let valid=can_seek && duration.is_some_and(|d| d>0) && (seek.track_id.is_none() || seek.track_id==track_id);
+                    let position=seek.position_ms.min(duration.unwrap_or(0));
+                    let sent=valid && ch.send(SetNowPlayingInformation{elapsed_ms:Some(position)}.encode()).await.is_ok();
+                    let _=events.send(BringupEvent::SeekResult{request_id:seek.request_id,position_ms:position,sent}).await;
+                }
+                continue;
+            }
             changed = vehicle.location.changed() => {
                 if changed.is_err() {
                     continue;
@@ -422,6 +442,19 @@ pub async fn run_accessory<C: ControlChannel, A: AsyncAuth>(
         let Some(msg_id) = frame_msg_id(&frame) else {
             continue;
         };
+        phone_tag.learn(&frame);
+        if let Ok(update)=NowPlayingUpdate::decode(&frame) {
+            if let Some(media)=&update.media_item_attributes {
+                if let Some(id)=media.persistent_id {
+                    let next=Some(id.to_string());
+                    if next!=track_id {duration=None;track_id=next;}
+                }
+                if let Some(ms)=media.duration_ms {duration=Some(ms);}
+            }
+            if let Some(playback)=update.playback_attributes {
+                if let Some(available)=playback.can_seek() {can_seek=available;}
+            }
+        }
         match msg_id {
             0xFFFA => {
                 location_types = StartLocationInformation::decode(&frame)

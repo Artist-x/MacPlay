@@ -27,7 +27,15 @@ impl ControlChannel for LinkChannel {
 }
 
 /// Completed file-transfer payloads (album artwork) the phone pushed over the link.
-pub type ArtworkRx = mpsc::UnboundedReceiver<Vec<u8>>;
+pub struct Artwork { pub id: u8, pub data: Vec<u8>, pub track_id: Option<String> }
+pub type ArtworkRx = mpsc::UnboundedReceiver<Artwork>;
+#[derive(Default)]
+struct ArtworkTags {
+    track: Option<String>,
+    advertised: std::collections::HashMap<u8, Option<String>>,
+    transfers: std::collections::HashMap<u8, Option<String>>,
+}
+
 
 pub fn spawn_link(fd: OwnedFd, cfg: LinkConfig, initiate_negotiate: bool) -> (LinkChannel, ArtworkRx) {
     set_nonblocking(fd.as_raw_fd());
@@ -48,7 +56,7 @@ async fn pump(
     initiate_negotiate: bool,
     mut out_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     in_tx: mpsc::UnboundedSender<Vec<u8>>,
-    art_tx: mpsc::UnboundedSender<Vec<u8>>,
+    art_tx: mpsc::UnboundedSender<Artwork>,
 ) -> io::Result<()> {
     let async_fd = AsyncFd::with_interest(fd, Interest::READABLE | Interest::WRITABLE)?;
     let start = Instant::now();
@@ -58,6 +66,7 @@ async fn pump(
     engine.start(initiate_negotiate, now());
     let mut reader = FrameReader::default();
     let mut ft = FileTransferReceiver::default();
+    let mut art_tags=ArtworkTags::default();
     let mut pending = engine.take_output();
 
     loop {
@@ -97,7 +106,7 @@ async fn pump(
         engine.advance_time(now());
         pending.extend(engine.take_output());
 
-        if !drain_events(&mut engine, &mut reader, &mut ft, &in_tx, &art_tx, &mut pending, now()) {
+        if !drain_events(&mut engine, &mut reader, &mut ft, &mut art_tags, &in_tx, &art_tx, &mut pending, now()) {
             return Ok(());
         }
     }
@@ -110,8 +119,9 @@ fn drain_events(
     engine: &mut LinkEngine,
     reader: &mut FrameReader,
     ft: &mut FileTransferReceiver,
+    art_tags: &mut ArtworkTags,
     in_tx: &mpsc::UnboundedSender<Vec<u8>>,
-    art_tx: &mpsc::UnboundedSender<Vec<u8>>,
+    art_tx: &mpsc::UnboundedSender<Artwork>,
     pending: &mut Vec<u8>,
     now: u64,
 ) -> bool {
@@ -121,17 +131,30 @@ fn drain_events(
             Event::Control(bytes) => {
                 reader.push(&bytes);
                 while let Some(frame) = reader.next_frame() {
+                    use iap2_csm::CsmMessage;
+                    if let Ok(update)=iap2_csm::messages::now_playing::NowPlayingUpdate::decode(&frame) {
+                        if let Some(media)=update.media_item_attributes {
+                            if let Some(id)=media.persistent_id {art_tags.track=Some(id.to_string());}
+                            if let Some(id)=media.artwork_ftid {art_tags.advertised.insert(id,art_tags.track.clone());}
+                        }
+                    }
                     if in_tx.send(frame).is_err() {
                         return false;
                     }
                 }
             }
             Event::FileTransfer(datagram) => {
+                if datagram.len()>=2 && matches!(datagram[1],0x04|0x80|0xC0) {
+                    let tag=art_tags.advertised.get(&datagram[0]).cloned().unwrap_or_else(||art_tags.track.clone());
+                    if datagram[1]==0x04 {art_tags.transfers.insert(datagram[0],tag);} else {art_tags.transfers.entry(datagram[0]).or_insert(tag);}
+                }
+                if datagram.len()>=2 && datagram[1]==0x02 {art_tags.transfers.remove(&datagram[0]);}
                 for out in ft.feed(&datagram) {
                     match out {
                         FtOutput::Reply(bytes) => ft_replies.push(bytes),
-                        FtOutput::Complete(data) => {
-                            let _ = art_tx.send(data);
+                        FtOutput::Complete(id, data) => {
+                            let track_id=art_tags.transfers.remove(&id).flatten();
+                            let _ = art_tx.send(Artwork{id,data,track_id});
                         }
                     }
                 }
@@ -177,7 +200,7 @@ async fn pump_stream<S>(
     initiate_negotiate: bool,
     mut out_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     in_tx: mpsc::UnboundedSender<Vec<u8>>,
-    art_tx: mpsc::UnboundedSender<Vec<u8>>,
+    art_tx: mpsc::UnboundedSender<Artwork>,
 ) -> io::Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -207,6 +230,7 @@ where
     engine.start(initiate_negotiate, now());
     let mut reader = FrameReader::default();
     let mut ft = FileTransferReceiver::default();
+    let mut art_tags=ArtworkTags::default();
     let mut pending = engine.take_output();
 
     loop {
@@ -236,7 +260,7 @@ where
         engine.advance_time(now());
         pending.extend(engine.take_output());
 
-        if !drain_events(&mut engine, &mut reader, &mut ft, &in_tx, &art_tx, &mut pending, now()) {
+        if !drain_events(&mut engine, &mut reader, &mut ft, &mut art_tags, &in_tx, &art_tx, &mut pending, now()) {
             return Ok(());
         }
     }
