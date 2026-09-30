@@ -7,7 +7,7 @@
   "scripts": {
     "build": "bash scripts/build-macplay.sh",
     "build:engine": "tsc -p native/Engine/tsconfig.json",
-    "test": "node --test native/Engine/display.test.cjs"
+    "test": "node --test native/Engine/display.test.cjs native/Engine/frameRateFallback.test.cjs native/Engine/identity.test.cjs native/Engine/phoneSelection.test.cjs"
   },
   "dependencies": {
     "livi-crypto": "workspace:*",

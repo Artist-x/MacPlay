@@ -1,117 +1,167 @@
 <p align="center"><img src="assets/icons/mac/macplay.iconset/icon_128x128.png" width="96" alt="MacPlay图标"></p>
 
-# MacPlay
+<h1 align="center">MacPlay</h1>
+
+<p align="center">让Mac通过USB或蓝牙配对与共用Wi-Fi接收iPhone的CarPlay画面，无需外接CarPlay适配器。</p>
 
 <p align="center">
   <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.0.1-2563eb?style=flat-square" alt="版本1.0.1"></a>
-  <a href="#当前状态"><img src="https://img.shields.io/badge/macOS-14%2B-555555?style=flat-square" alt="macOS14及以上"></a>
-  <a href="#当前状态"><img src="https://img.shields.io/badge/platform-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon平台"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="GPL-3.0-or-later许可证"></a>
+  <a href="#使用条件"><img src="https://img.shields.io/badge/macOS-14%2B-555555?style=flat-square" alt="macOS14及以上"></a>
+  <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="GPL-3.0-or-later"></a>
 </p>
 
-让Mac通过USB或共用Wi-Fi接收iPhone的CarPlay画面，提供原生macOS设置界面、分辨率选择与帧率请求。
+<p align="center"><a href="#安装与首次连接">安装与首次连接</a> · <a href="#功能">功能</a> · <a href="#常见问题">常见问题</a> · <a href="#从源码构建">从源码构建</a> · <a href="#来源与许可">来源与许可</a></p>
 
-基于LIVI改造，设置界面使用SwiftUI，视频窗口使用AppKit。
+**开始使用前，需要自行提供有使用权限且互相匹配的配件认证证书与私钥**。公开源码和DMG不包含认证材料；缺少它们时，应用能够打开，但无法建立CarPlay连接。
 
-## 当前状态
+当前版本为1.0.1，构建号20。基于LIVI改造，设置界面使用SwiftUI，视频窗口使用AppKit。有线与无线CarPlay连接均已在真实iPhone上跑通；这不代表所有Mac、iPhone与iOS版本均已验证。
 
-当前版本为1.0.1，构建号15，支持运行macOS14及以上版本的Apple Silicon Mac。
+## 使用条件
 
-有线与无线CarPlay连接均已在真实iPhone上跑通。无线使用Mac内置蓝牙完成连接引导，再通过共用Wi-Fi传输画面，无需LIVI Link。
-
-- 通过USB数据线直连，或选择蓝牙配对与共用Wi-Fi连接。
-- 支持屏幕原生像素、常用分辨率和自定义宽高。
-- 普通视频窗口固定尺寸，允许拖动标题栏；原生模式默认全屏并避开刘海。
-- 提供30fps、60fps、90fps和120fps请求上限，高帧请求支持120→90→60自动回退。
-- 支持触控板点击、拖动和双指滚动，双指滚动转换为CarPlay的单指滑动。
-- 取消界面倍率调节，按固定窗口对应的真实物理尺寸上报显示参数。
-
-源码和DMG不包含认证文件，使用前须自行提供可用的配件认证材料。安装包采用本地签名，未经过Apple公证。
-
-## 原生界面
-
-设置窗口使用SwiftUI侧栏、分组表单、菜单、开关与滑块，投屏窗口使用AppKit。保留连接、显示、音频和诊断四页，移除Android Auto设置、仪表页面及Electron/React前端。Node.js作为辅助应用内的后台协议服务运行，不单独显示程序坞图标。
-
-## 安装与连接
-
-打开本地构建生成的`MacPlay-1.0.1-arm64.dmg`，将MacPlay拖入“应用程序”，启动后按需要允许本地网络、蓝牙和麦克风权限；读取Wi-Fi名称时另需定位授权。使用菜单退出应用。
-
-### 有线
-
-1. 用支持数据传输的USB线连接iPhone与Mac。
-2. 解锁iPhone，在Finder和iPhone上完成“信任此电脑”。
-3. 启动MacPlay，在“连接”页面选择“有线CarPlay”，点击“启动接收”或“应用并重新连接”，保持iPhone解锁，并确认出现的CarPlay连接提示。
-
-有线后端通过macOS系统usbmuxd打开iPhone的carkit服务。若系统拒绝服务或USB网络接口不可用，连接不能继续；普通文件传输连接成功不代表CarPlay连接成功。
-
-### 无线
-
-1. Mac与iPhone加入同一个允许设备相互访问的Wi-Fi网络。
-2. 打开“连接”，选择“无线CarPlay”，点击“读取当前网络”。macOS需要定位权限才能返回Wi-Fi名称；网络密码需自行填写。
-3. 点击“启动接收”，再点击“打开蓝牙设置”，使Mac可被发现。
-4. 在iPhone“设置→蓝牙”中选择Mac的系统名称，在两端确认配对码。
-5. 回到MacPlay，点击“应用并重新连接”，在iPhone上打开“设置→通用→CarPlay”，确认连接提示。后端先通过蓝牙识别与认证，再转到Wi-Fi传输视频。
-
-MacPlay使用Mac内置蓝牙，不会创建名为MacPlay的Wi-Fi。两端应连接同一个现有Wi-Fi。蓝牙页面显示Mac的系统名称，CarPlay接收端名称为MacPlay。有线模式仅启用USB连接后端，无线模式仅启用蓝牙连接后端。当前自动连接仅筛选名称含iPhone的已配对设备，请保留设备名称中的iPhone。
-
-### 认证文件
-
-认证文件独立保存在用户的应用支持目录`MacPlay/authentication`中，文件名为`identity.pk8`和`certificate.p7b`。可在“诊断”页面导入文件。
-
-源码和DMG不包含认证私钥或证书。运行时需要自行提供有使用权限且互相匹配的文件。导入后，应用会在连接时使用这些文件完成配件认证。
-
-## 车机身份与触控板
-
-MacPlay使用独立的持久化配对密钥、配对标识和车机序列号，名称和型号均为MacPlay。安装1.0.1构建15后首次连接会生成新的MacPlay身份，需在iPhone上重新确认CarPlay。Wi-Fi地址和路由器标识继续用于网络连接，认证证书与私钥仍由用户单独提供。旧的车机记录可在iPhone“设置→通用→CarPlay”中管理。
-
-在视频区域使用触控板：点击对应点按；按住并移动对应拖动；双指上下或左右滚动对应单指滑动，可用于列表滚动和页面切换。滚动方向遵循macOS自然滚动设置。离开窗口焦点、手势结束或取消时释放触摸。当前没有映射捏合缩放、旋转或系统三指手势。
-
-## 分辨率与帧率
-
-入口为侧栏“显示”。改变参数后点击“应用并重新连接”，使iPhone重新协商。
-
-| 设置 | 可选值 |
+| 项目 | 要求 |
 | --- | --- |
-| 分辨率 | 屏幕原生像素（避开刘海）、1280×720、1920×1080、2560×1440、自定义 |
-| 最高帧率 | 30fps、60fps、90fps、120fps |
+| Mac | Apple Silicon，macOS14及以上；未提供Intel版 |
+| iPhone | 支持CarPlay；连接时解锁并确认系统提示 |
+| 配件认证 | 自行提供`identity.pk8`与`certificate.p7b`，且有权用于该用途 |
+| 有线连接 | 支持数据传输的USB线，完成“信任此电脑” |
+| 无线连接 | 两端完成蓝牙配对，并加入允许设备互访的同一个Wi-Fi |
+| 网络凭据 | 填写SSID与共享密码；可授权读取Mac已保存的Wi-Fi密码 |
 
-分辨率改变请求的视频像素尺寸。帧率是请求上限，不能保证iPhone实际输出对应帧数。
+DMG包含Node.js与GStreamer运行组件，使用安装包无需另装开发工具。当前包采用本地签名，未经过Apple公证。
 
-90/120fps作为实验请求提供，不代表iPhone实际输出对应帧率。下一代CarPlay架构允许图形同步快于60fps，但出现Ultra选项不能证明当前远程视频流支持高帧率。参考[Apple的下一代CarPlay架构说明](https://developer.apple.com/videos/play/wwdc2024/10111/)。
+## 安装与首次连接
 
-选择120fps时先请求120fps；发起CarPlay连接后20秒内未启动视频，或视频启动前会话结束，自动改用90fps重连。90fps仍失败则改用60fps；直接选择90fps时失败也会改用60fps。60fps不再降档或循环重试。界面会显示回退原因并保存实际请求档位。缺少认证文件、尚未配对和主动停止不触发回退，已启动视频后的普通断线也不触发回退。
+1. 获取`MacPlay-1.0.1-arm64.dmg`，打开后将MacPlay拖入“应用程序”。GitHub源码ZIP不能直接作为应用运行。
+2. 启动MacPlay。如果系统拦截，在“系统设置→隐私与安全性”中检查并允许打开该应用。
+3. 在“诊断”页面导入`identity.pk8`与`certificate.p7b`。文件保存在本机应用支持目录的`MacPlay/authentication`中，不上传到服务器。
+4. 按以下步骤选择有线或无线连接。首次出现权限、信任或配对提示时，在Mac和iPhone上确认。
 
-原生模式优先读取主显示器的物理像素尺寸，读取失败时使用当前显示模式的像素尺寸；再按macOS提供的刘海安全区域换算并扣除对应像素，宽高向下取偶数。选择原生模式后，投屏窗口默认全屏并避开刘海。
+### 认证材料从哪里获取
 
-其他分辨率保留完整视频像素，按视频像素占屏幕物理像素的比例换算固定窗口，允许拖动标题栏移动，禁止调整窗口大小。计算不把Retina倍率或系统缩放后的渲染分辨率当成真实屏幕尺寸；最终显示仍由macOS合成。超过当前屏幕可见区域的分辨率会提示无法按原尺寸显示，不自动缩小。鼠标坐标按实际画面区域换算。
+MacPlay当前没有获准公开分发的认证材料下载地址。仅下载DMG或注册Apple开发者账号，不会自动获得本程序需要的证书和私钥。
 
-已移除界面倍率调节。接收端只上报所选视频分辨率及固定窗口对应的真实物理尺寸，不使用假定DPI或人为倍率。系统无法返回真实尺寸时会提示错误。
+1. **已有CarPlay配件或方案授权**：联系原配件厂商或认证方案供应商，说明接收端为MacPlay、采用本地文件签名，申请明确允许这一用途的配套材料。购买配件本身不等于获准导出或复用其认证身份。
+2. **商业产品开发**：通过[Apple MFi官方入口](https://mfi.apple.com/)与[官方FAQ](https://mfi.apple.com/en/faqs)确认参与资格及适用认证方案。MFi加入和认证是申请流程，不是通用私钥下载服务；最终方案也可能使用硬件认证，而不提供MacPlay所需的文件。
+3. **已有合法授权的配套文件**：向提供方确认文件格式、适用产品、使用范围和是否允许本地软件签名，再按下表导入。不要把证书、私钥发到GitHub Issues或聊天中。
 
-请关闭CarPlay“设置→显示屏→智能缩放显示”。本次对照中，开启时iPhone原图为1250×786，关闭后的原图为3456×2170，与请求像素一致。该开关由iPhone控制，MacPlay没有远程修改它的接口。
+| 文件 | 当前实现读取的格式 |
+| --- | --- |
+| `identity.pk8` | DER编码的PKCS#8 P-256私钥 |
+| `certificate.p7b` | 提供方配套的配件证书数据，需与私钥匹配并被iPhone接受 |
+
+进入“诊断→导入认证文件”，选择这两份文件，然后重新启动接收。其他产品的证书、Apple开发者签名证书和自行生成的密钥不能直接视为可用CarPlay配件身份。没有获准使用的材料时，可安装和查看设置，但当前版本不能完成CarPlay连接。
+
+### 有线CarPlay
+
+1. 用USB数据线连接iPhone与Mac，解锁iPhone，在Finder和iPhone上完成信任确认。
+2. 在MacPlay“连接”页面选择“有线CarPlay”。多台iPhone同时接入时，在“iPhone”列表中选择目标设备。
+3. 点击“启动接收”或“应用并重新连接”，在iPhone上确认CarPlay提示，等待画面出现。
+
+有线连接不需要填写Wi-Fi信息。后端通过macOS系统usbmuxd打开iPhone的carkit服务；仅在Finder中看到手机，不代表CarPlay会话已建立。
+
+### 无线CarPlay
+
+1. Mac与iPhone加入同一个允许设备互访的Wi-Fi，选择“无线CarPlay”。
+2. 点击“读取当前网络”。macOS要求定位权限才能返回Wi-Fi名称；若无法读取，可手动填写SSID。
+3. 填写网络密码，或点击“读取已保存密码”并按钥匙串提示授权。系统钥匙串可能要求管理员用户名与登录密码；这里不是填写Wi-Fi用户名。读取成功后无需日常重复授权。
+4. 点击“打开蓝牙设置”，在iPhone“设置→蓝牙”中选择Mac的系统名称，在两端确认配对码。首次发现建议保留iPhone设备名称中的“iPhone”。
+5. 在MacPlay选择目标iPhone，点击“应用并重新连接”，再在iPhone“设置→通用→CarPlay”中确认连接。
+
+MacPlay使用Mac内置蓝牙引导连接，然后通过Wi-Fi传输音视频，不创建名为MacPlay的热点。蓝牙页面显示Mac的系统名称，CarPlay入口名称为MacPlay。
+
+当前握手使用SSID与共享密码，不支持发送802.1X企业Wi-Fi的用户名、个人密码或证书。检测到当前网络采用企业认证时，应用会提示改用个人Wi-Fi、热点或USB。网页登录凭据也不是Wi-Fi共享密码，程序不会读取网页登录密码。访客网络、客户端隔离或网络防火墙可能阻止连接。
+
+### 选择与记忆iPhone
+
+“自动（上次连接的iPhone）”使用上次收到视频配置的设备记录，兼用于有线和无线。目标设备不在时不会自动切换到另一台；需要切换时，从列表中选择设备，再点击“应用并重新连接”。
+
+列表包含已识别的蓝牙配对设备、USB接入设备和历史连接设备。同名设备附有标识末尾。某台iPhone仅连接过无线、尚无USB记录时，第一次有线连接需要手动选择其USB条目，成功后关联记录。
+
+## 功能
+
+- 原生设置界面：连接、显示、音频和诊断四页。
+- 有线与无线接收：有线使用系统USB服务，无线使用内置蓝牙与共用Wi-Fi。
+- 分辨率：屏幕原生像素（避开刘海）、1280×720、1920×1080、2560×1440，以及自定义宽高。
+- 固定视频窗口：允许拖动标题栏，禁止调整窗口大小；原生像素模式默认全屏并避开刘海。
+- 触控板：点击、拖动、双指滚动；双指滚动转换为CarPlay单指滑动，方向遵循系统自然滚动设置。
+- 音频：播放音量默认100%，可在音频页面调整。
+- 设备选择：默认上次连接的iPhone，可手动选择其他已识别设备。
+
+### 分辨率与帧率
+
+选择显示参数后点击“应用并重新连接”，使iPhone重新协商。视频像素与固定窗口的真实物理尺寸分别上报，不提供界面倍率调节。普通窗口按视频像素占屏幕物理像素的比例计算；超过可见区域时提示错误，不自动缩小。
+
+请关闭CarPlay“设置→显示屏→智能缩放显示”。此前对照中，开启时iPhone原图为1250×786，关闭后的原图为3456×2170，与该次请求像素一致。MacPlay没有远程修改这一开关的接口。
+
+| 帧率请求 | 回退行为 |
+| --- | --- |
+| 30fps、60fps | 不自动降档 |
+| 90fps | 视频启动协商失败后改用60fps |
+| 120fps | 视频启动协商失败后依次改用90fps、60fps |
+
+发起CarPlay启动协商后20秒内未收到视频配置，或视频启动前会话结束，触发一次降档重连；60fps不再降档。认证前失败、主动停止及已启动视频后的普通断线不触发降档。
+
+90/120fps是实验请求，不能保证iPhone实际输出对应帧率。出现CarPlay Ultra选项也不能证明当前远程视频流支持高帧率。首次连接建议使用60fps。参考[Apple的下一代CarPlay架构说明](https://developer.apple.com/videos/play/wwdc2024/10111/)。
+
+## 常见问题
+
+| 现象 | 检查方法 |
+| --- | --- |
+| 提示缺少认证文件 | 在诊断页面导入两份匹配且获准使用的认证文件；安装包不会自动生成它们 |
+| USB未识别或无法启动CarPlay | 更换数据线，解锁iPhone并确认信任；检查USB设备和连接阶段 |
+| 无线一直等待连接 | 检查配对、目标iPhone、SSID、密码及设备互访；不要寻找“MacPlay”Wi-Fi |
+| 读不到Wi-Fi名称 | 允许MacPlay定位权限，重新读取；仍失败时手动输入SSID |
+| 密码读取要求管理员授权 | 按macOS钥匙串提示操作，或手动填写一次；不是每次连接都要读取钥匙串 |
+| 图标很大、原图像素低于请求 | 关闭CarPlay自身的智能缩放显示，再对照截图与诊断记录 |
+| 自定义分辨率无法启动 | 选择较低分辨率或原生像素模式，确认窗口能按物理像素比例放入屏幕 |
+| 选择设备后没有连接 | 确认所选设备已接入或配对，再应用设置；自动模式不会改连其他设备 |
+
+通过应用菜单退出。更新时退出旧版后替换应用，认证与设置保留在本机应用支持目录。要彻底移除个人配置，可退出应用后手动删除该目录；仅删除应用不会清除已保存的Wi-Fi密码和配对记录。
+
+## 数据与权限
+
+网络密码、设备记录和配对密钥保存在本机应用支持目录，设置文件权限限制为当前用户读写。密码读取由macOS钥匙串授权控制，密码不输出到程序日志。
+
+- 定位权限仅用于读取Wi-Fi信息，位置回调不保存坐标。
+- 蓝牙和本地网络用于连接iPhone；麦克风用于通话及语音上行。
+- 协议日志可能包含设备名称、地址和网络信息，分享诊断前应检查并遮盖个人数据。
+- README徽章由Shields.io加载，运行应用本身不依赖徽章服务。
 
 ## 从源码构建
 
-在项目根目录操作。需要macOS、Xcode命令行工具、Node.js、pnpm、Rust、pkg-config和GStreamer开发SDK。GStreamer运行库随工程提供；编译仍需要开发头文件和pkg-config描述文件。
+需要macOS、Xcode命令行工具、Node.js、pnpm、Rust、pkg-config与GStreamer开发SDK。将开发SDK的`lib/pkgconfig`加入`PKG_CONFIG_PATH`；打包时使用工程中的GStreamer运行库。
+
+在仓库根目录运行：
 
 ```sh
 pnpm install
-bash scripts/build-macplay.sh
+pnpm run build
 ```
 
-构建输出在`dist`目录。脚本构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再生成Apple Silicon DMG。未配置开发者证书时使用本地签名，不执行公证或发布。
+输出为`dist/MacPlay.app`与`dist/MacPlay-1.0.1-arm64.dmg`。脚本构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再执行本地签名和DMG打包，不提交或发布。
 
-## 开发记录
+编译协议服务并运行现有针对性测试：
 
-有线与无线连接已完成真机投屏，使用者确认无线连接时USB线未连接。关闭CarPlay智能缩放后的对照原图为3456×2170，与该次请求像素一致。2026-09-30，使用者确认当前应用已完全跑通。
+```sh
+pnpm run build:engine
+pnpm test
+```
 
-1.0.1删除4K预设，旧的4K预设配置迁移到原生模式。构建15恢复90/120fps实验请求及120→90→60回退链路。媒体音量默认100%。
+运行库的许可证在`assets/licenses`与`assets/gstreamer/LICENSES`中。分发修改版时，需同时满足应用及第三方组件的许可证条件，提供发行二进制对应的源码和构建资料。
 
-详细开发过程见[验证记录](docs/MACPLAY-VALIDATION.md)。其中早期构建的限制和问题属于历史记录，当前使用方式以本文为准。
+## 验证范围
 
-## 来源与版权
+有线与无线已在真实iPhone上显示CarPlay，使用者确认无线测试时USB未连接。关闭智能缩放后的原图曾达到3456×2170。
 
-MacPlay基于[LIVI](https://github.com/f-io/LIVI)修改，保留其许可证及原作者署名；连接和显示参数设计同时参考[DiPlay](https://github.com/shihabal3amri/DiPlay)与本地AndroidPlay实现。
+当前20项针对性测试通过，覆盖显示参数、帧率回退、持久化身份与目标设备匹配。构建20的编译和DMG打包已完成；密码读取已根据使用者反馈恢复此前可用路径。多台真机切换、企业Wi-Fi检测和全新Mac首次安装尚未完成独立实测，不作全设备兼容保证。
 
-项目沿用上游声明的GPL-3.0-or-later，完整条款见[LICENSE](LICENSE)。分发修改后的软件时，应按适用许可证提供相应源码与版权声明。第三方组件继续适用各自许可证，详见[NOTICE](NOTICE)。
+详细记录见[开发验证记录](docs/MACPLAY-VALIDATION.md)与[1.0.1发布检查](docs/RELEASE-1.0.1.md)。
 
-MacPlay是独立衍生项目，不代表Apple或上游作者。CarPlay、iPhone、Mac及相关商标属于其权利人。开源代码许可不包含Apple认证材料、商标或第三方私钥的使用授权。
+## 来源与许可
+
+MacPlay直接基于[LIVI](https://github.com/f-io/LIVI)，保留Lasse Heitgres及贡献者的版权与许可声明。连接、认证及显示参数同时参考[DiPlay](https://github.com/shihabal3amri/DiPlay)和本地AndroidPlay衍生实现。来源说明见[NOTICE](NOTICE)。
+
+项目沿用上游声明的GPL-3.0-or-later，条款见[LICENSE](LICENSE)。第三方组件继续适用各自许可证；开源代码许可不包含配件认证证书、私钥、Apple商标或其他第三方材料的授权。
+
+MacPlay为独立衍生项目，不代表Apple或上游作者，不声称获得MFi认证，也不声称是历史上首个Mac CarPlay接收端。CarPlay、iPhone与Mac等商标属于其权利人，用于说明兼容对象。请勿在仓库、发行附件或问题报告中上传认证私钥、网络密码和私人配对记录。

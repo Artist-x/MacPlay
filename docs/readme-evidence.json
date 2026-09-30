@@ -3,13 +3,13 @@
   "claims": [
     {
       "id": "version",
-      "quote": "当前版本为1.0.1，构建号15",
+      "quote": "当前版本为1.0.1，构建号20",
       "level": "implementation",
       "reasoning": "打包脚本声明的应用版本。",
       "evidence": [
         {
           "path": "scripts/package-native.sh",
-          "excerpt": "<key>CFBundleVersion</key><string>15</string>"
+          "excerpt": "<key>CFBundleVersion</key><string>20</string>"
         }
       ]
     },
@@ -26,30 +26,6 @@
       ]
     },
     {
-      "id": "fixed",
-      "quote": "按固定窗口对应的真实物理尺寸上报显示参数",
-      "level": "implementation",
-      "reasoning": "像素占面板比例换算毫米数。",
-      "evidence": [
-        {
-          "path": "native/Engine/display.ts",
-          "excerpt": "settings.screenWidthMm*width/settings.screenPixelWidth"
-        }
-      ]
-    },
-    {
-      "id": "native",
-      "quote": "对照原图为3456×2170",
-      "level": "device",
-      "reasoning": "使用者提供的智能缩放对照原图。",
-      "evidence": [
-        {
-          "path": "docs/MACPLAY-VALIDATION.md",
-          "excerpt": "关闭后的对照达到请求像素"
-        }
-      ]
-    },
-    {
       "id": "license",
       "quote": "GPL-3.0-or-later",
       "level": "implementation",
@@ -62,26 +38,18 @@
       ]
     },
     {
-      "id": "independent-identity",
-      "quote": "独立的持久化配对密钥",
+      "id": "authentication-required",
+      "quote": "公开源码和DMG不包含认证材料",
       "level": "implementation",
-      "reasoning": "使用MacPlay专属身份目录生成配对密钥，车机地址从其公钥派生。",
+      "reasoning": "导入目录与打包脚本均将凭据保留在用户目录，安装包不复制认证材料。",
       "evidence": [
         {
-          "path": "native/Engine/protocol/identity.ts",
-          "excerpt": "'cp', 'macplay-v3', 'identity.json'"
-        }
-      ]
-    },
-    {
-      "id": "fps-fallback-chain",
-      "quote": "120→90→60自动回退",
-      "level": "implementation",
-      "reasoning": "认证后CarPlay启动请求开启计时，失败降低一档；60fps不会继续降档。",
-      "evidence": [
+          "path": "native/App/MacPlay.swift",
+          "excerpt": "guard credentialsReady else"
+        },
         {
-          "path": "native/Engine/frameRateFallback.ts",
-          "excerpt": "this.retry(this.fps===120?90:60)"
+          "path": ".gitignore",
+          "excerpt": "**/identity.pk8"
         }
       ]
     }
