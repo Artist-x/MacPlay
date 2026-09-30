@@ -9,6 +9,7 @@
   <a href="#使用条件"><img src="https://img.shields.io/badge/macOS-14%2B-555555?style=flat-square" alt="macOS14及以上"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="GPL-3.0-or-later"></a>
+  <a href="https://github.com/Roylyl/MacPlay/releases"><img src="https://img.shields.io/github/downloads/Roylyl/MacPlay/total?style=flat-square&amp;label=downloads&amp;color=2563eb" alt="GitHub发行文件累计下载量"></a>
 </p>
 
 <p align="center"><a href="#安装与首次连接">安装与首次连接</a> · <a href="#功能">功能</a> · <a href="#更新日志">更新日志</a> · <a href="#常见问题">常见问题</a> · <a href="#从源码构建">从源码构建</a> · <a href="#来源与许可">来源与许可</a></p>
