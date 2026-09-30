@@ -193,6 +193,8 @@ interface CpSession {
 }
 
 export class CpStack extends EventEmitter {
+  deviceFilter: ((id: string) => boolean) | null = null
+  private deviceAccepted = false
   private readonly _conns = new Set<net.Socket>()
   private _configRefresh: (() => void) | null = null
   /** The session whose event connection is live, used to route outgoing touch. */
@@ -669,6 +671,11 @@ export class CpStack extends EventEmitter {
       return { status: 400 }
     }
     const dict = body as Record<string, PlistValue>
+    if (this.deviceFilter && !this.deviceAccepted) {
+      const id = typeof dict.deviceID === 'string' ? dict.deviceID : ''
+      if (!id || !this.deviceFilter(id)) return { status: 403 }
+      this.deviceAccepted = true
+    }
     const streams = dict.streams
 
     if (Array.isArray(streams)) {

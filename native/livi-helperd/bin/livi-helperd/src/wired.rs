@@ -204,6 +204,9 @@ pub async fn watch_usbmuxd(
         });
 
         for device in devices {
+            let target = std::env::var("MACPLAY_TARGET_USB").unwrap_or_default();
+            if !target.is_empty() && target.replace('-', "") != device.udid.replace('-', "") { continue; }
+
             if active.contains_key(&device.udid) {
                 continue;
             }

@@ -18,7 +18,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>15</string>
+<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>20</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
@@ -46,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>15</string>
+<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>20</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>

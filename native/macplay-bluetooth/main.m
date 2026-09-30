@@ -20,6 +20,9 @@
 @end
 @implementation Bridge
 - (void)attach:(IOBluetoothRFCOMMChannel *)channel {
+    NSString *target=NSProcessInfo.processInfo.environment[@"MACPLAY_TARGET_BT"];
+    NSString *address=[[[channel getDevice] addressString] stringByReplacingOccurrencesOfString:@"-" withString:@":"];
+    if(target.length && ![target.lowercaseString isEqual:address.lowercaseString]) {[channel closeChannel];return;}
     if(self.attaching || (self.channel==channel && self.fd>=0)) return;
     if (self.channel && self.channel != channel) { [channel closeChannel]; return; }
     self.attaching=YES;
@@ -102,6 +105,9 @@
 - (void)scan {
     if(self.channel) return;
     for(IOBluetoothDevice *device in [IOBluetoothDevice pairedDevices]) {
+        NSString *target=NSProcessInfo.processInfo.environment[@"MACPLAY_TARGET_BT"];
+        NSString *address=[device.addressString stringByReplacingOccurrencesOfString:@"-" withString:@":"];
+        if(target.length && ![target.lowercaseString isEqual:address.lowercaseString]) continue;
         if(![[device name].lowercaseString containsString:@"iphone"] || [self.pending containsObject:device.addressString]) continue;
         [self.pending addObject:device.addressString];
         unsigned char raw[]={0,0,0,0,0xde,0xca,0xfa,0xde,0xde,0xca,0xde,0xaf,0xde,0xca,0xca,0xfe};

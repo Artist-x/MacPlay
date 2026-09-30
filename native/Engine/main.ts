@@ -10,6 +10,7 @@ import { dataDir } from './storage'
 import { addon, setVideoCallback } from './media'
 import { displayConfig } from './display'
 import { FrameRateFallback } from './frameRateFallback'
+import { acceptsPhone } from './phoneSelection'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(path.join(dataDir,'settings.json'),'utf8'))
@@ -22,17 +23,18 @@ const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
 let videoReady=false
+let phoneInfo: {name:string;deviceId:string}|undefined
 const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
  if(stopping||videoReady)return
  process.stdout.write(JSON.stringify({fallbackFps:String(fps),status:`${settings.fps}fps协商未启动视频，改用${fps}fps重连`,detail:"将自动降低帧率请求并重新连接。"})+"\n")
 })
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native')
-setVideoCallback(()=>{frameRateGuard.videoStarted();videoReady=true;log('已收到视频配置','CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
+setVideoCallback(()=>{frameRateGuard.videoStarted();videoReady=true;if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('已收到视频配置','CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
 if (!fs.existsSync(path.join(authDir,'identity.pk8')) || !fs.existsSync(path.join(authDir,'certificate.p7b'))) {
  log('缺少认证文件','请在诊断页面打开认证目录，放入有使用权限的配套文件。');process.exit(2)
 }
-const helper=spawn(path.join(resources,'driver/livi-helperd'),[],{env:{...process.env,MACPLAY_AUTH_DIR:authDir,MACPLAY_WIFI_SSID:settings.ssid||'',LIVI_CP_NAME:'MacPlay',MACPLAY_SERIAL:'MACPLAY-'+identity.pairingId.toUpperCase(),LIVI_CP_DEVICE_ID:config.deviceId,LIVI_CP_AP_MAC:settings.wireless ? settings.accessPointMAC||'' : '',LIVI_CP_BT_MAC:config.btMac,LIVI_CP_PK:identity.pkHex,LIVI_CP_PI:identity.pairingId,LIVI_CP_AIRPLAY_PORT:'17000',LIVI_CP_WIRELESS:settings.wireless?'1':'0',LIVI_WIFI_IFACE:settings.wifiInterface||'en0',LIVI_PASSPHRASE:settings.password||'',LIVI_CHANNEL:String(settings.channel||36)},stdio:['ignore','pipe','pipe']})
+const helper=spawn(path.join(resources,'driver/livi-helperd'),[],{env:{...process.env,MACPLAY_AUTH_DIR:authDir,MACPLAY_WIFI_SSID:settings.ssid||'',LIVI_CP_NAME:'MacPlay',MACPLAY_SERIAL:'MACPLAY-'+identity.pairingId.toUpperCase(),LIVI_CP_DEVICE_ID:config.deviceId,LIVI_CP_AP_MAC:settings.wireless ? settings.accessPointMAC||'' : '',LIVI_CP_BT_MAC:config.btMac,LIVI_CP_PK:identity.pkHex,LIVI_CP_PI:identity.pairingId,LIVI_CP_AIRPLAY_PORT:'17000',LIVI_CP_WIRELESS:settings.wireless?'1':'0',LIVI_WIFI_IFACE:settings.wifiInterface||'en0',MACPLAY_TARGET_BT:settings.targetBluetooth||'',MACPLAY_TARGET_USB:settings.targetUSB||'',LIVI_PASSPHRASE:settings.password||'',LIVI_CHANNEL:String(settings.channel||36)},stdio:['ignore','pipe','pipe']})
 for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({input:stream!}).on('line',line=>{
  console.error(line)
  if(line.includes('Bluetooth SDP timed out')) log('蓝牙握手未完成','请在iPhone蓝牙页面与Mac完成配对，并确认两端配对码。')
@@ -52,7 +54,9 @@ helper.on('exit',code=>{if(!stopping)log('连接后端已退出',String(code))})
 const server=net.createServer(socket=>{
  const usbSession=wiredReady && !socket.remoteAddress?.endsWith('%'+settings.wifiInterface)
  log('收到连接请求','正在协商认证与音视频')
- const stack=new CpStack(config);sessions.add(stack);active=stack
+ const stack=new CpStack(config);sessions.add(stack)
+ stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
+ stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
  stack.on('session-active',()=>{frameRateGuard.negotiationStarted();stack.setStreamVolume(3,settings.volume??1,0);log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
  stack.on('session-ended',()=>{frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;log('连接已断开','接收端继续等待iPhone')}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})

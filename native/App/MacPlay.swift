@@ -5,6 +5,14 @@ import CoreLocation
 import IOKit
 import IOBluetooth
 import Combine
+import Security
+
+struct PhoneChoice: Codable, Identifiable {
+    var id: String
+    var name: String
+    var bluetooth: String? = nil
+    var usb: String? = nil
+}
 
 struct PlaySettings: Codable {
     var resolution = "native"
@@ -15,6 +23,11 @@ struct PlaySettings: Codable {
     var screenWidthMm: Double? = nil
     var screenHeightMm: Double? = nil
     var fps = 60
+    var selectedPhone: String? = nil
+    var lastPhone: String? = nil
+    var phones: [PhoneChoice]? = nil
+    var targetBluetooth: String? = nil
+    var targetUSB: String? = nil
     var wireless = false
     var ssid = ""
     var password = ""
@@ -36,7 +49,9 @@ struct PlaySettings: Codable {
     @Published var running = false
     @Published var logs = ""
     @Published var credentialsReady = false
+    @Published var readingPassword = false
     @Published var networkStatus = "尚未读取网络"
+    @Published var phoneChoices: [PhoneChoice] = []
     @Published var usbDevices: [String] = []
     @Published var usbStage = "接收服务未启动"
     @Published var usbError = ""
@@ -138,6 +153,48 @@ struct PlaySettings: Codable {
             networkStatus="已获定位权限，但系统未返回Wi-Fi名称。请确认Mac已连接Wi-Fi后重试。"
         }
     }
+    var currentNetworkIsEnterprise: Bool {
+        guard let interface=CWWiFiClient.shared().interface(withName:settings.wifiInterface),interface.ssid()==settings.ssid else {return false}
+        return [7,8,9,10,12].contains(Int(interface.security().rawValue))
+    }
+    func readSavedNetworkPassword() {
+        guard !readingPassword else { return }
+        if currentNetworkIsEnterprise {
+            networkStatus="当前网络使用802.1X企业认证（用户名/密码或证书）。MacPlay的无线握手不支持发送这类凭据，请改用个人Wi-Fi、热点或USB连接。"
+            return
+        }
+        let ssid=settings.ssid
+        guard !ssid.isEmpty else {networkStatus="请先读取当前网络名称。";return}
+        readingPassword=true
+        networkStatus="正在读取钥匙串；如有系统提示，请授权MacPlay访问该网络密码。"
+        Task {
+            let result=await Task.detached { () -> (OSStatus, String?) in
+                var length: UInt32=0
+                var bytes: UnsafeMutableRawPointer?
+                let service="AirPort"
+                let status=service.withCString { servicePtr in
+                    ssid.withCString { accountPtr in
+                        SecKeychainFindGenericPassword(nil,UInt32(service.utf8.count),servicePtr,UInt32(ssid.utf8.count),accountPtr,&length,&bytes,nil)
+                    }
+                }
+                defer { if let bytes {SecKeychainItemFreeContent(nil,bytes)} }
+                let password=bytes.flatMap {String(data:Data(bytes:$0,count:Int(length)),encoding:.utf8)}
+                return (status,password)
+            }.value
+            readingPassword=false
+            guard settings.ssid==ssid else {networkStatus="网络已切换，请重新读取密码。";return}
+            if result.0==errSecSuccess,let password=result.1,!password.isEmpty {
+                settings.password=password
+                networkStatus="已读取保存的密码，点击“应用并重新连接”使用网络凭据。"
+            } else if result.0==errSecItemNotFound {
+                networkStatus="钥匙串未找到该网络的可读取密码，请手动填写。"
+            } else if result.0==errSecUserCanceled || result.0==errSecAuthFailed || result.0==errSecInteractionNotAllowed {
+                networkStatus="未获准读取网络密码，请重新授权或手动填写。"
+            } else {
+                networkStatus="无法读取网络密码（系统状态码\(result.0)），请手动填写。"
+            }
+        }
+    }
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         Task { @MainActor [weak self] in
             guard let self else {return}
@@ -157,13 +214,27 @@ struct PlaySettings: Codable {
         }
         defer {IOObjectRelease(iterator)}
         var phones:[String]=[]
+        var choices=settings.phones ?? []
         while case let device=IOIteratorNext(iterator), device != 0 {
             defer {IOObjectRelease(device)}
             guard let value=IORegistryEntryCreateCFProperty(device,"USB Product Name" as CFString,kCFAllocatorDefault,0)?.takeRetainedValue() as? String else {continue}
-            if value.localizedCaseInsensitiveContains("iPhone") {phones.append(value)}
+            if value.localizedCaseInsensitiveContains("iPhone") {
+                phones.append(value)
+                if let serial=IORegistryEntryCreateCFProperty(device,"USB Serial Number" as CFString,kCFAllocatorDefault,0)?.takeRetainedValue() as? String {
+                    if !choices.contains(where:{$0.usb?.replacingOccurrences(of:"-",with:"")==serial.replacingOccurrences(of:"-",with:"")}) {choices.append(PhoneChoice(id:"usb:"+serial,name:value,usb:serial))}
+                }
+            }
         }
         let changed=phones.count != usbDevices.count
         usbDevices=phones
+        for device in (IOBluetoothDevice.pairedDevices() as? [IOBluetoothDevice] ?? []) {
+            let address=device.addressString?.replacingOccurrences(of:"-",with:":").lowercased() ?? ""
+            guard !address.isEmpty else {continue}
+            if device.name?.localizedCaseInsensitiveContains("iPhone") == true || choices.contains(where:{$0.bluetooth==address}) {
+                if !choices.contains(where:{$0.bluetooth==address}) {choices.append(PhoneChoice(id:address,name:device.name ?? "iPhone",bluetooth:address))}
+            }
+        }
+        phoneChoices=choices
         if changed {usbError="";usbStage=running ? "等待USB握手，请保持iPhone解锁" : "接收服务未启动"}
     }
     var usbStatus: String {
@@ -188,6 +259,18 @@ struct PlaySettings: Codable {
         guard let w=settings.screenWidthMm,let h=settings.screenHeightMm,w>0,h>0 else {
             throw NSError(domain:"MacPlay",code:3,userInfo:[NSLocalizedDescriptionKey:"系统未返回显示器真实尺寸，无法上报固定窗口的物理大小。"])
         }
+        let selected=settings.selectedPhone ?? settings.lastPhone
+        let phone=phoneChoices.first(where:{$0.id==selected})
+        settings.targetBluetooth=phone?.bluetooth
+        settings.targetUSB=phone?.usb
+        if settings.targetUSB==nil && !settings.wireless && phone==nil {
+            let usbChoices=phoneChoices.filter{$0.usb != nil}
+            if usbChoices.count>1 {throw NSError(domain:"MacPlay",code:5,userInfo:[NSLocalizedDescriptionKey:"检测到多台USB连接的iPhone，请先选择要连接的设备。"])}
+            if usbChoices.count==1 {settings.targetUSB=usbChoices.first?.usb}
+        }
+        if let phone,settings.wireless ? phone.bluetooth==nil : phone.usb==nil {
+            throw NSError(domain:"MacPlay",code:4,userInfo:[NSLocalizedDescriptionKey:"所选iPhone缺少当前连接方式的设备记录，请选择已配对或USB接入的设备完成首次连接。"])
+        }
         let data=try JSONEncoder().encode(settings);try data.write(to:configURL,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)
     }
@@ -197,6 +280,9 @@ struct PlaySettings: Codable {
         stop();inspectCredentials()
         settings.bluetoothMAC=IOBluetoothHostController.default()?.addressAsString()?.replacingOccurrences(of:"-",with:":") ?? ""
         guard credentialsReady else {status="缺少认证文件";detail="请在诊断页面导入有使用权限的配套认证文件。";return}
+        if settings.wireless && currentNetworkIsEnterprise {
+            status="当前Wi-Fi采用企业认证";detail="无线CarPlay握手不支持802.1X用户名/密码或证书，请改用个人Wi-Fi、热点或USB连接。";return
+        }
         if settings.wireless && settings.ssid.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
             status="无线连接缺少网络信息";detail="请先读取当前Wi-Fi名称。";return
         }
@@ -249,6 +335,18 @@ struct PlaySettings: Codable {
                         self.start(isFallback:true)
                     }
                 }
+                if let deviceId=value["connectedPhone"],!deviceId.isEmpty {
+                    var known=settings.phones ?? []
+                    let bt=deviceId.replacingOccurrences(of:"-",with:":").lowercased()
+                    let udid=value["connectedUSB"].flatMap{$0.isEmpty ? nil : $0} ?? known.first(where:{$0.bluetooth==bt})?.usb
+                    let name=value["phoneName"].flatMap{$0.isEmpty ? nil : $0} ?? "iPhone"
+                    known.removeAll{$0.id==bt || $0.bluetooth==bt || (udid != nil && $0.usb==udid)}
+                    known.append(PhoneChoice(id:bt,name:name,bluetooth:bt,usb:udid))
+                    settings.phones=known;settings.lastPhone=bt
+                    if settings.selectedPhone != nil {settings.selectedPhone=bt}
+                    refreshUSB()
+                    if let encoded=try? JSONEncoder().encode(settings){try? encoded.write(to:configURL,options:.atomic);try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)}
+                }
                 readUSBEvent(value)
             }
             logs += line+"\n";if logs.count>24000 {logs=String(logs.suffix(18000))}
@@ -287,6 +385,12 @@ struct SettingsView: View {
                         Section("接收端") {
                             LabeledContent("状态",value:model.status)
                             Text(model.detail).foregroundStyle(.secondary).font(.callout).textSelection(.enabled)
+                            Picker("iPhone",selection:Binding(get:{model.settings.selectedPhone ?? "auto"},set:{model.settings.selectedPhone=$0=="auto" ? nil : $0})) {
+                                Text("自动（上次连接的iPhone）").tag("auto")
+                                ForEach(model.phoneChoices){phone in Text(phone.name+"（"+String(phone.id.suffix(5))+"）").tag(phone.id)}
+                            }
+                            Button("刷新iPhone列表"){model.refreshUSB()}
+                            Text("自动模式优先连接上次成功显示画面的iPhone。切换设备后点击“应用并重新连接”。").font(.callout).foregroundStyle(.secondary)
                             Picker("连接方式",selection:$model.settings.wireless) {
                                 Text("有线CarPlay").tag(false)
                                 Text("无线CarPlay").tag(true)
@@ -301,13 +405,18 @@ struct SettingsView: View {
                         }}
                         if model.settings.wireless {
                             Section("共用Wi-Fi") {
-                                TextField("网络名称",text:$model.settings.ssid)
+                                TextField("网络名称（SSID）",text:$model.settings.ssid)
                                 SecureField("网络密码",text:$model.settings.password)
                                 TextField("网络接口",text:$model.settings.wifiInterface)
                                 Stepper("信道：\(model.settings.channel)",value:$model.settings.channel,in:1...196)
-                                HStack {Button("读取当前网络"){model.detectNetwork(requestPermission:true)};Button("打开定位设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)};Button("打开蓝牙设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.BluetoothSettings")!)}}
+                                HStack {
+                                    Button("读取当前网络"){model.detectNetwork(requestPermission:true)}
+                                    Button(model.readingPassword ? "正在读取密码…" : "读取已保存密码"){model.readSavedNetworkPassword()}.disabled(model.readingPassword || model.settings.ssid.isEmpty)
+                                    Button("打开定位设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)}
+                                    Button("打开蓝牙设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.BluetoothSettings")!)}
+                                }.fixedSize(horizontal:true,vertical:false)
                                 Text(model.networkStatus).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                                Text("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。网络密码需自行填写。").font(.callout).foregroundStyle(.secondary)
+                                Text("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。").font(.callout).foregroundStyle(.secondary)
                             }
                         }
                     case .display:
@@ -354,7 +463,7 @@ struct SettingsView: View {
                     Button(model.running ? "应用并重新连接" : "启动接收"){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
             }.navigationTitle((page ?? .connection).rawValue)
-        }.frame(minWidth:760,minHeight:560).onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB()}
+        }.frame(minWidth:900,minHeight:560).onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB()}
     }
 }
 

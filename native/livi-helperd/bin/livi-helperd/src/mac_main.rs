@@ -51,7 +51,7 @@ fn cp_config() -> (CpConfig, Identity) {
         ap_on_air: None,
         wifi_iface: env_s("LIVI_WIFI_IFACE", "en0"),
         ssid: name.clone(),
-        passphrase: env_s("LIVI_PASSPHRASE", "12345678"),
+        passphrase: env_s("LIVI_PASSPHRASE", ""),
         channel: env_s("LIVI_CHANNEL", "36").parse().unwrap_or(36),
         security_type: SecurityType::WpaWpa2,
         airplay_port: env_s("LIVI_CP_AIRPLAY_PORT", "17000")
