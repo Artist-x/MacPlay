@@ -2,84 +2,35 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build
-
-HOST_ARCH="$(uname -m)"
-TARGET_ARCH="${MACPLAY_ARCH:-}"
-
-# Parse optional arguments like --arch=x64 or --arch=arm64
-for arg in "$@"; do
-  case "$arg" in
-    --arch=*)
-      TARGET_ARCH="${arg#*=}"
-      ;;
-  esac
+TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
+for arg in "$@"; do case "$arg" in --arch=*) TARGET_ARCH="${arg#*=}";; esac; done
+case "$TARGET_ARCH" in x64|x86_64) ARCHES=(x86_64);; arm64|aarch64) ARCHES=(arm64);; universal) ARCHES=(arm64 x86_64);; *) echo "Unknown architecture: $TARGET_ARCH" >&2; exit 1;; esac
+for arch in "${ARCHES[@]}"; do
+  triple=aarch64-apple-darwin; node_arch=arm64
+  if [[ "$arch" == x86_64 ]]; then triple=x86_64-apple-darwin; node_arch=x64; fi
+  stage="build/architectures/$arch"
+  mkdir -p "$stage"
+  swiftc -parse-as-library -O -target "$arch-apple-macosx14.0" -framework SwiftUI -framework AppKit -framework CoreWLAN -framework CoreLocation -framework IOKit -framework IOBluetooth -framework CoreAudio -framework MediaPlayer native/App/MacPlay.swift native/App/NowPlayingState.swift native/App/NowPlayingFeed.swift -o "$stage/MacPlay"
+  clang -fobjc-arc -arch "$arch" -mmacosx-version-min=14.0 -framework Foundation -framework AppKit -framework IOBluetooth -sectcreate __TEXT __info_plist native/macplay-bluetooth/Info.plist native/macplay-bluetooth/main.m -o "$stage/macplay-bluetooth"
+  node scripts/build-native.mjs "--arch=$node_arch"
+  cp native/livi-crypto/build/Release/livi_crypto.node native/livi-gst-video/build/Release/gst_video.node "$stage/"
+  cargo build --release --target "$triple" --manifest-path native/livi-helperd/Cargo.toml -p livi-helperd
+  cp "native/livi-helperd/target/$triple/release/livi-helperd" "$stage/"
 done
-
-if [[ -z "$TARGET_ARCH" ]]; then
-  if [[ "$HOST_ARCH" == "x86_64" ]]; then
-    TARGET_ARCH="x64"
-  else
-    TARGET_ARCH="arm64"
-  fi
-fi
-
-echo "==> Building MacPlay for target architecture: $TARGET_ARCH (host: $HOST_ARCH)"
-
-SWIFT_FLAGS=(-parse-as-library -O -framework SwiftUI -framework AppKit -framework CoreWLAN -framework CoreLocation -framework IOKit -framework IOBluetooth -framework CoreAudio -framework MediaPlayer)
-CLANG_FLAGS=(-fobjc-arc -framework Foundation -framework AppKit -framework IOBluetooth -sectcreate __TEXT __info_plist native/macplay-bluetooth/Info.plist)
-CARGO_FLAGS=(--release --manifest-path native/livi-helperd/Cargo.toml -p livi-helperd)
-
-case "$TARGET_ARCH" in
-  x64|x86_64)
-    NORM_ARCH="x86_64"
-    NODE_ARCH_ARG="--arch=x64"
-    SWIFT_FLAGS+=(-target x86_64-apple-macosx14.0)
-    CLANG_FLAGS+=(-arch x86_64)
-    if [[ "$HOST_ARCH" != "x86_64" ]]; then
-      rustup target add x86_64-apple-darwin 2>/dev/null || true
-      CARGO_FLAGS+=(--target x86_64-apple-darwin)
-    fi
-    ;;
-  arm64|aarch64)
-    NORM_ARCH="arm64"
-    NODE_ARCH_ARG="--arch=arm64"
-    SWIFT_FLAGS+=(-target arm64-apple-macosx14.0)
-    CLANG_FLAGS+=(-arch arm64)
-    if [[ "$HOST_ARCH" != "arm64" ]]; then
-      rustup target add aarch64-apple-darwin 2>/dev/null || true
-      CARGO_FLAGS+=(--target aarch64-apple-darwin)
-    fi
-    ;;
-  universal)
-    NORM_ARCH="universal"
-    NODE_ARCH_ARG="--arch=x64"
-    SWIFT_FLAGS+=(-target arm64-apple-macosx14.0 -target x86_64-apple-macosx14.0)
-    CLANG_FLAGS+=(-arch arm64 -arch x86_64)
-    ;;
-  *)
-    echo "Unknown architecture: $TARGET_ARCH. Defaulting to host ($HOST_ARCH)"
-    NORM_ARCH="$HOST_ARCH"
-    NODE_ARCH_ARG="--arch=$HOST_ARCH"
-    ;;
-esac
-
-export MACPLAY_ARCH="$NORM_ARCH"
-
-echo "==> Compiling Swift UI..."
-swiftc "${SWIFT_FLAGS[@]}" native/App/MacPlay.swift native/App/NowPlayingState.swift native/App/NowPlayingFeed.swift -o build/MacPlay
-
-echo "==> Compiling Bluetooth bridge..."
-clang "${CLANG_FLAGS[@]}" native/macplay-bluetooth/main.m -o native/macplay-bluetooth/macplay-bluetooth
-
-echo "==> Building native addons..."
-node scripts/build-native.mjs "$NODE_ARCH_ARG"
-
-echo "==> Building helper daemon..."
-cargo build "${CARGO_FLAGS[@]}"
-
-echo "==> Compiling TypeScript engine..."
+mkdir -p build/combined
+for name in MacPlay macplay-bluetooth livi_crypto.node gst_video.node livi-helperd; do
+  if [[ ${#ARCHES[@]} == 2 ]]; then
+    lipo -create "build/architectures/arm64/$name" "build/architectures/x86_64/$name" -output "build/combined/$name"
+  else cp "build/architectures/${ARCHES[0]}/$name" "build/combined/$name"; fi
+done
+cp build/combined/MacPlay build/MacPlay
+cp build/combined/macplay-bluetooth native/macplay-bluetooth/macplay-bluetooth
+cp build/combined/livi_crypto.node native/livi-crypto/build/Release/livi_crypto.node
+cp build/combined/gst_video.node native/livi-gst-video/build/Release/gst_video.node
 node node_modules/typescript/bin/tsc -p native/Engine/tsconfig.json
-
-echo "==> Packaging native app..."
-bash scripts/package-native.sh "$@"
-
+export MACPLAY_ARCH="$TARGET_ARCH"
+export MACPLAY_HELPERD_BIN="$PWD/build/combined/livi-helperd"
+APP_ONLY=false
+for arg in "$@"; do if [[ "$arg" == --app-only ]]; then APP_ONLY=true; fi; done
+if $APP_ONLY; then bash scripts/package-native.sh --app-only
+else bash scripts/package-native.sh; fi

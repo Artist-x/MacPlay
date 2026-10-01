@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-NODE_BIN="$(command -v node)"
+TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
+case "$TARGET_ARCH" in x64) TARGET_ARCH=x86_64;; aarch64) TARGET_ARCH=arm64;; esac
+REQUIRED_ARCHES=("$TARGET_ARCH")
+if [[ "$TARGET_ARCH" == universal ]]; then REQUIRED_ARCHES=(arm64 x86_64); fi
+source scripts/prepare-macos-runtime.sh
+NODE_BIN="${MACPLAY_NODE_BIN:-$NODE_BIN}"
 APP="${MACPLAY_APP_OUTPUT:-$PWD/dist/MacPlay.app}"
 RES="$APP/Contents/Resources"
 RECEIVER="$RES/runtime/MacPlayReceiver.app"
@@ -18,7 +23,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>28</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>29</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
@@ -31,7 +36,7 @@ for mod in livi-crypto livi-gst-video; do
  cp "native/$mod/index.js" "native/$mod/package.json" "$RES/engine/node_modules/$mod/"
  cp "native/$mod/build/Release/"*.node "$RES/engine/node_modules/$mod/build/Release/"
 done
-HELPERD_BIN="native/livi-helperd/target/release/livi-helperd"
+HELPERD_BIN="${MACPLAY_HELPERD_BIN:-native/livi-helperd/target/release/livi-helperd}"
 if [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/x86_64-apple-darwin/release/livi-helperd" ]]; then
   HELPERD_BIN="native/livi-helperd/target/x86_64-apple-darwin/release/livi-helperd"
 elif [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/aarch64-apple-darwin/release/livi-helperd" ]]; then
@@ -39,12 +44,27 @@ elif [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/aarch64-apple-darw
 fi
 cp "$HELPERD_BIN" native/macplay-bluetooth/macplay-bluetooth "$RES/driver/"
 
-TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
+# Refuse a package whose runtime cannot execute on its advertised architecture.
+for required in "${REQUIRED_ARCHES[@]}"; do
+  for binary in "$APP/Contents/MacOS/MacPlay" "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do
+    lipo -verify_arch "$required" "$binary"
+  done
+done
 rm -rf "$RES/gstreamer"
 mkdir -p "$RES/gstreamer"
 cp -R assets/gstreamer/macos-arm64 "$RES/gstreamer/macos-arm64"
 ln -sfn macos-arm64 "$RES/gstreamer/macos-x64"
-GST_DIR_NAME="macos-x64"
+if [[ -n "${MACPLAY_GSTREAMER_EXTRA:-}" ]]; then
+  cp -R "$MACPLAY_GSTREAMER_EXTRA/lib/." "$RES/gstreamer/macos-arm64/lib/"
+fi
+if [[ -n "${MACPLAY_APPLEMEDIA_UNIVERSAL:-}" ]]; then
+  cp "$MACPLAY_APPLEMEDIA_UNIVERSAL" "$RES/gstreamer/macos-arm64/lib/gstreamer-1.0/libgstapplemedia.dylib"
+fi
+for required in "${REQUIRED_ARCHES[@]}"; do
+  while IFS= read -r -d '' binary; do
+    lipo -verify_arch "$required" "$binary"
+  done < <(find "$RES/gstreamer/macos-arm64" -type f \( -name '*.dylib' -o -name 'gst-*' \) -print0)
+done
 
 cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
 mkdir -p "$RES/icons"
@@ -61,7 +81,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>28</string>
+<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>29</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>
@@ -83,5 +103,10 @@ if [[ "${1:-}" != "--app-only" ]]; then
  ln -sfn /Applications build/dmg/Applications
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
+ python3 - <<'DOC'
+from pathlib import Path
+text = Path('docs/发行版使用教程.md').read_text().replace('(../README.md)', '(https://github.com/Roylyl/MacPlay#readme)')
+Path('build/dmg/使用教程.md').write_text(text)
+DOC
  hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.1.0-${TARGET_ARCH}.dmg"
 fi

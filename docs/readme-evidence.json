@@ -3,13 +3,13 @@
   "claims": [
     {
       "id": "version",
-      "quote": "当前版本为1.1.0，构建号28",
+      "quote": "当前版本为1.1.0，构建号29",
       "level": "implementation",
       "reasoning": "打包脚本声明的应用版本。",
       "evidence": [
         {
           "path": "scripts/package-native.sh",
-          "excerpt": "<key>CFBundleVersion</key><string>28</string>"
+          "excerpt": "<key>CFBundleVersion</key><string>29</string>"
         }
       ]
     },

@@ -37,12 +37,12 @@ function cargoEnv() {
 
 function cargoBuild(manifest, pkg) {
   const args = ['build', '--release', '-p', pkg, '--manifest-path', manifest]
-  if (cross) {
+  if (process.platform === 'darwin') {
     execFileSync('rustup', ['target', 'add', triple], { stdio: 'inherit' })
     args.push('--target', triple)
   }
   execFileSync('cargo', args, { stdio: 'inherit', env: cargoEnv() })
-  return join(dirname(manifest), 'target', ...(cross ? [triple] : []), 'release')
+  return join(dirname(manifest), 'target', ...(process.platform === 'darwin' ? [triple] : []), 'release')
 }
 
 function place(src, destDir, destName) {
