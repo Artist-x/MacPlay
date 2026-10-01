@@ -1,6 +1,16 @@
+import fs from 'node:fs'
 import path from 'node:path'
 const root = process.env.MACPLAY_RESOURCES || path.resolve(__dirname, '../..')
-const gst = path.join(root, 'gstreamer/macos-arm64')
+const archDir = process.arch === 'x64' ? 'macos-x64' : 'macos-arm64'
+let gst = path.join(root, 'gstreamer', archDir)
+if (!fs.existsSync(gst)) {
+  const armFallback = path.join(root, 'gstreamer/macos-arm64')
+  if (fs.existsSync(armFallback)) {
+    gst = armFallback
+  } else {
+    gst = path.join(root, 'gstreamer/macos')
+  }
+}
 process.env.GST_PLUGIN_SYSTEM_PATH = ''
 process.env.GST_PLUGIN_PATH = path.join(gst,'lib/gstreamer-1.0')
 process.env.GST_PLUGIN_SCANNER = path.join(gst,'libexec/gstreamer-1.0/gst-plugin-scanner')

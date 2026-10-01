@@ -9,7 +9,9 @@ set -euo pipefail
 MODE="full"
 if [[ "${1:-}" == "--relocate-node" ]]; then MODE="node"; shift || true; fi
 
-OUT="${1:-assets/gstreamer/macos-arm64}"
+DEFAULT_ARCH="macos-arm64"
+if [[ "$(uname -m)" == "x86_64" ]]; then DEFAULT_ARCH="macos-x64"; fi
+OUT="${1:-assets/gstreamer/$DEFAULT_ARCH}"
 GST_ROOT="/Library/Frameworks/GStreamer.framework/Versions/1.0"
 
 copy_required() {
@@ -112,7 +114,8 @@ relocate_node() {
   local REPO_ROOT NODE BUNDLE_RPATH rp
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   NODE="$REPO_ROOT/native/livi-gst-video/build/Release/gst_video.node"
-  BUNDLE_RPATH="@loader_path/../../../../../gstreamer/macos-arm64/lib"
+  local OUT_DIRNAME="$(basename "$OUT")"
+  BUNDLE_RPATH="@loader_path/../../../../../gstreamer/$OUT_DIRNAME/lib"
   if [[ ! -e "$NODE" ]]; then
     echo "WARN: $NODE not built yet; build the addon before packaging" >&2
     return 0

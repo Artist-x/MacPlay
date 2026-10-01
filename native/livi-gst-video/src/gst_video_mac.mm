@@ -173,6 +173,7 @@ extern "C" void macplay_configure_window(double width, double height,
   mpSetWindowAspect(width/height);
 }
 
+#ifndef MACPLAY_WINDOW_STANDALONE
 // Clip view: sized to the content rectangle
 @interface LIVIClipView : NSView {
 @public
@@ -341,6 +342,7 @@ extern "C" void livi_set_backdrop(guintptr parent, double r, double g, double b)
   NSColor* col = [NSColor colorWithSRGBRed:r green:g blue:b alpha:1.0];
   p.layer.backgroundColor = col.CGColor;
 }
+#endif
 
 // MacPlay's standalone AppKit video surface; no browser or HTML UI.
 struct MPInput { double x,y; int down; };

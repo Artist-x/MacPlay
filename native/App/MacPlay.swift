@@ -449,7 +449,21 @@ struct PlaySettings: Codable {
             guard let resources=Bundle.main.resourceURL else {throw NSError(domain:"MacPlay",code:1,userInfo:[NSLocalizedDescriptionKey:"找不到应用资源目录"])}
             let task=Process();task.executableURL=resources.appendingPathComponent("runtime/MacPlayReceiver.app/Contents/MacOS/MacPlayReceiver");task.arguments=[resources.appendingPathComponent("engine/main.js").path]
             var environment=ProcessInfo.processInfo.environment;environment["MACPLAY_RESOURCES"]=resources.path;environment["MACPLAY_DATA"]=directory.path
-            environment["DYLD_LIBRARY_PATH"]=resources.appendingPathComponent("gstreamer/macos-arm64/lib").path
+            let gstLibPath: String = {
+                #if arch(x86_64)
+                let x64Path = resources.appendingPathComponent("gstreamer/macos-x64/lib")
+                if FileManager.default.fileExists(atPath: x64Path.path) { return x64Path.path }
+                #else
+                let arm64Path = resources.appendingPathComponent("gstreamer/macos-arm64/lib")
+                if FileManager.default.fileExists(atPath: arm64Path.path) { return arm64Path.path }
+                #endif
+                let armFallback = resources.appendingPathComponent("gstreamer/macos-arm64/lib")
+                if FileManager.default.fileExists(atPath: armFallback.path) { return armFallback.path }
+                let uniFallback = resources.appendingPathComponent("gstreamer/macos/lib")
+                if FileManager.default.fileExists(atPath: uniFallback.path) { return uniFallback.path }
+                return resources.appendingPathComponent("gstreamer/macos-x64/lib").path
+            }()
+            environment["DYLD_LIBRARY_PATH"]=gstLibPath
             task.environment=environment
             let stdin=Pipe(),stdout=Pipe();task.standardInput=stdin;task.standardOutput=stdout;task.standardError=stdout
             output=stdout;input=stdin;process=task
