@@ -7,7 +7,7 @@
 <p align="center">
   <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.1.0-2563eb?style=flat-square" alt="版本1.1.0"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/macOS-14%2B-555555?style=flat-square" alt="macOS14及以上"></a>
-  <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Apple%20Silicon-555555?style=flat-square" alt="Apple Silicon"></a>
+  <a href="#使用条件"><img src="https://img.shields.io/badge/platform-Apple%20Silicon%20%7C%20Intel-555555?style=flat-square" alt="Apple Silicon | Intel"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="GPL-3.0-or-later"></a>
   <a href="https://github.com/Roylyl/MacPlay/releases"><img src="https://img.shields.io/github/downloads/Roylyl/MacPlay/total?style=flat-square&amp;label=downloads&amp;color=2563eb" alt="GitHub发行文件累计下载量"></a>
 </p>
@@ -22,7 +22,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Mac | Apple Silicon，macOS14及以上；未提供Intel版 |
+| Mac | Apple Silicon 或 Intel (x86_64)，macOS14及以上 |
 | iPhone | 支持CarPlay；连接时解锁并确认系统提示 |
 | 配件认证 | 内置实验性身份；也可自行导入匹配且获准使用的材料 |
 | 有线连接 | 支持数据传输的USB线，完成“信任此电脑” |
@@ -33,7 +33,7 @@ DMG包含Node.js与GStreamer运行组件，使用安装包无需另装开发工�
 
 ## 安装与首次连接
 
-1. 获取`MacPlay-1.1.0-arm64.dmg`，打开后将MacPlay拖入“应用程序”。GitHub源码ZIP不能直接作为应用运行。
+1. 获取对应架构的DMG安装包（`MacPlay-1.1.0-arm64.dmg`或`MacPlay-1.1.0-x86_64.dmg`），打开后将MacPlay拖入“应用程序”。GitHub源码ZIP不能直接作为应用运行。
 2. 启动MacPlay。如果系统拦截，在“系统设置→隐私与安全性”中检查并允许打开该应用。
 3. 首次启动会自动准备内置认证文件，无需手动导入。如需使用自己的身份，在“诊断”页面导入`identity.pk8`与`certificate.p7b`。文件保存在本机应用支持目录的`MacPlay/authentication`中，不上传到服务器。
 4. 按以下步骤选择有线或无线连接。首次出现权限、信任或配对提示时，在Mac和iPhone上确认。
@@ -173,7 +173,7 @@ pnpm install
 pnpm run build
 ```
 
-输出为`dist/MacPlay.app`与`dist/MacPlay-1.1.0-arm64.dmg`。脚本构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再执行本地签名和DMG打包，不提交或发布。
+输出为`dist/MacPlay.app`与`dist/MacPlay-1.1.0-<arch>.dmg`（如`MacPlay-1.1.0-x86_64.dmg`或`MacPlay-1.1.0-arm64.dmg`）。脚本根据当前架构或指定参数构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再执行本地签名和DMG打包，不提交或发布。
 
 编译协议服务并运行现有针对性测试：
 

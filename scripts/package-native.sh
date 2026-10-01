@@ -31,8 +31,21 @@ for mod in livi-crypto livi-gst-video; do
  cp "native/$mod/index.js" "native/$mod/package.json" "$RES/engine/node_modules/$mod/"
  cp "native/$mod/build/Release/"*.node "$RES/engine/node_modules/$mod/build/Release/"
 done
-cp native/livi-helperd/target/release/livi-helperd native/macplay-bluetooth/macplay-bluetooth "$RES/driver/"
-if [[ ! -d "$RES/gstreamer/macos-arm64" ]]; then cp -R assets/gstreamer/macos-arm64 "$RES/gstreamer/"; fi
+HELPERD_BIN="native/livi-helperd/target/release/livi-helperd"
+if [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/x86_64-apple-darwin/release/livi-helperd" ]]; then
+  HELPERD_BIN="native/livi-helperd/target/x86_64-apple-darwin/release/livi-helperd"
+elif [[ ! -f "$HELPERD_BIN" && -f "native/livi-helperd/target/aarch64-apple-darwin/release/livi-helperd" ]]; then
+  HELPERD_BIN="native/livi-helperd/target/aarch64-apple-darwin/release/livi-helperd"
+fi
+cp "$HELPERD_BIN" native/macplay-bluetooth/macplay-bluetooth "$RES/driver/"
+
+TARGET_ARCH="${MACPLAY_ARCH:-$(uname -m)}"
+rm -rf "$RES/gstreamer"
+mkdir -p "$RES/gstreamer"
+cp -R assets/gstreamer/macos-arm64 "$RES/gstreamer/macos-arm64"
+ln -sfn macos-arm64 "$RES/gstreamer/macos-x64"
+GST_DIR_NAME="macos-x64"
+
 cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
 mkdir -p "$RES/icons"
 cp assets/icons/carplay/macplay-256.png assets/icons/carplay/macplay-512.png "$RES/icons/"
@@ -59,7 +72,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 ADDON="$RES/engine/node_modules/livi-gst-video/build/Release/gst_video.node"
-while IFS= read -r rp; do install_name_tool -delete_rpath "$rp" "$ADDON"; done < <(otool -l "$ADDON" | awk '/LC_RPATH/{getline;getline;print $2}')
+while IFS= read -r rp; do install_name_tool -delete_rpath "$rp" "$ADDON" 2>/dev/null || true; done < <(otool -l "$ADDON" | awk '/LC_RPATH/{getline;getline;print $2}')
+install_name_tool -add_rpath '@loader_path/../../../../../gstreamer/macos-x64/lib' "$ADDON"
 install_name_tool -add_rpath '@loader_path/../../../../../gstreamer/macos-arm64/lib' "$ADDON"
 for bin in "$RECEIVER/Contents/MacOS/MacPlayReceiver" "$RES/driver/"* "$RES/engine/node_modules/"*/build/Release/*.node; do codesign --force --sign - "$bin"; done
 codesign --force --sign - "$RECEIVER"
@@ -69,5 +83,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  ln -sfn /Applications build/dmg/Applications
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
- hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO dist/MacPlay-1.1.0-arm64.dmg
+ hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.1.0-${TARGET_ARCH}.dmg"
 fi

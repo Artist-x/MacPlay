@@ -2,7 +2,7 @@ MacPlay1.1.0简明使用教程（构建28）
 项目地址：https://github.com/Roylyl/MacPlay
 
 一、安装
-适用于Apple Silicon Mac、macOS14及以上。
+适用于Apple Silicon及Intel架构Mac、macOS14及以上。
 打开DMG，将MacPlay拖入“应用程序”后启动。如果系统拦截，在“系统设置→隐私与安全性”中确认打开。
 1.1.0内置实验性认证材料，首次启动自动准备；已导入的本机身份优先使用。
 首次安装默认1280×720、60fps，优先使用内建显示器。更新安装保留原有设置。
