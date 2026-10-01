@@ -2,10 +2,10 @@
 
 ## 1.1.0
 
-### 构建29：Intel与通用版
+### 构建29：Intel与M系列版
 
 - 基于drewpall的Intel支持PR补齐双架构构建与打包。
-- 新增Universal安装包，合并Swift主程序、蓝牙桥接、Rust后端、加密与视频模块和Node运行时。
+- 分别提供M系列与Intel安装包，主程序、蓝牙桥接、Rust后端、加密与视频模块和Node运行时使用对应架构。
 - 补齐Intel硬件解码插件及依赖，保留ARM定制插件。
 - 新增Markdown发行版使用教程，说明安装包选择、使用步骤及Intel验证范围。
 

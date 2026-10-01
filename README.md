@@ -33,7 +33,7 @@ DMG包含Node.js与GStreamer运行组件，使用安装包无需另装开发工�
 
 ## 安装与首次连接
 
-1. 获取对应架构的DMG安装包（推荐`MacPlay-1.1.0-universal.dmg`，同时适用于Apple Silicon与Intel；Intel也可使用`MacPlay-1.1.0-x86_64.dmg`），打开后将MacPlay拖入“应用程序”。GitHub源码ZIP不能直接作为应用运行。
+1. 获取对应架构的DMG安装包（M系列选择`MacPlay-1.1.0-arm64.dmg`，Intel选择`MacPlay-1.1.0-x86_64.dmg`），打开后将MacPlay拖入“应用程序”。GitHub源码ZIP不能直接作为应用运行。
 2. 启动MacPlay。如果系统拦截，在“系统设置→隐私与安全性”中检查并允许打开该应用。
 3. 首次启动会自动准备内置认证文件，无需手动导入。如需使用自己的身份，在“诊断”页面导入`identity.pk8`与`certificate.p7b`。文件保存在本机应用支持目录的`MacPlay/authentication`中，不上传到服务器。
 4. 按以下步骤选择有线或无线连接。首次出现权限、信任或配对提示时，在Mac和iPhone上确认。
@@ -124,7 +124,7 @@ MacPlay不提供界面倍率调节，也不能远程修改这个开关。关闭�
 
 ### 1.1.0
 
-- 构建29补齐Intel与Universal安装包：分别编译并合并主程序、蓝牙桥接、USB后端、加密模块、视频模块与Node运行时；补齐Intel硬件解码插件。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
+- 构建29分别提供M系列与Intel安装包：按目标架构编译主程序、蓝牙桥接、USB后端、加密模块、视频模块与Node运行时；补齐Intel硬件解码插件。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
 
 - 首次安装默认分辨率调整为1280×720，保留已有用户的显示配置。
 - 主动停止或已出视频的会话断开后，关闭CarPlay窗口并恢复“启动接收”状态。
@@ -175,13 +175,13 @@ pnpm install
 pnpm run build
 # Intel
 pnpm run build -- --arch=x64
-# Apple Silicon与Intel通用版
-pnpm run build -- --arch=universal
+# M系列
+pnpm run build -- --arch=arm64
 ```
 
-输出为`dist/MacPlay.app`与`dist/MacPlay-1.1.0-<arch>.dmg`（`arm64`、`x86_64`或`universal`）。脚本根据当前架构或指定参数构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再执行本地签名和DMG打包，不提交或发布。
+输出为`dist/MacPlay.app`与`dist/MacPlay-1.1.0-<arch>.dmg`（`arm64`或`x86_64`）。脚本根据当前架构或指定参数构建SwiftUI应用、蓝牙桥接程序、Rust连接后端、音视频模块和Node.js协议服务，再执行本地签名和DMG打包，不提交或发布。
 
-构建脚本会下载对应架构的官方Node运行时；通用版分别构建两种架构后使用lipo合并。现有ARM硬件解码插件缺少Intel架构时，脚本会下载同版本官方GStreamer包补齐Intel插件与依赖，保留已有ARM插件。下载与解包内容只保存到忽略的`build`目录。
+构建脚本会下载对应架构的官方Node运行时，发行版按M系列与Intel分别打包。现有ARM硬件解码插件缺少Intel架构时，脚本会下载同版本官方GStreamer包补齐Intel插件与依赖，保留已有ARM插件。下载与解包内容只保存到忽略的`build`目录。
 
 编译协议服务并运行现有针对性测试：
 
@@ -198,7 +198,7 @@ pnpm test
 
 此前23项针对性测试通过，覆盖显示参数、帧率回退、持久化身份、目标设备匹配及音量边界与断开条件。后续补充了媒体状态、大封面分片传输及iAP2播放位置跳转检查，构建28的Swift、TypeScript编译和DMG打包已完成。独立媒体通道已使用当前连接iPhone的实际数据确认总时长、播放位置、可解码封面与跳转权限能被读取；这不替代控制中心最终显示和实际拖动验证。外接多屏、通话音量、被动断开、多台真机切换、企业Wi-Fi检测和全新Mac首次安装仍需独立设备验证。
 
-构建29的双架构编译、签名和运行组件验证记录见[Intel与通用版构建说明](docs/INTEL-UNIVERSAL.md)。Intel实体Mac与iPhone的有线/无线连接尚未实测；Rosetta运行检查不等同于Intel真机验证。
+构建29的双架构编译、签名和运行组件验证记录见[Intel与M系列构建说明](docs/INTEL-UNIVERSAL.md)。Intel实体Mac与iPhone的有线/无线连接尚未实测；Rosetta运行检查不等同于Intel真机验证。
 
 详细记录见[开发验证记录](docs/MACPLAY-VALIDATION.md)与[1.1.0验证记录](docs/RELEASE-1.1.0.md)。
 

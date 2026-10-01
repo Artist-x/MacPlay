@@ -103,10 +103,6 @@ if [[ "${1:-}" != "--app-only" ]]; then
  ln -sfn /Applications build/dmg/Applications
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
- python3 - <<'DOC'
-from pathlib import Path
-text = Path('docs/发行版使用教程.md').read_text().replace('(../README.md)', '(https://github.com/Roylyl/MacPlay#readme)')
-Path('build/dmg/使用教程.md').write_text(text)
-DOC
+
  hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.1.0-${TARGET_ARCH}.dmg"
 fi
