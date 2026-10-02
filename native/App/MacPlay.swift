@@ -8,6 +8,7 @@ import Combine
 import Security
 import CoreAudio
 import MediaPlayer
+import Darwin
 
 struct DisplayChoice: Identifiable {
     let id: UInt32
@@ -31,6 +32,9 @@ struct PhoneChoice: Codable, Identifiable {
 }
 
 struct PlaySettings: Codable {
+    var language: String? = nil
+    var autoStartUSB: Bool? = nil
+    var backgroundEnabled: Bool? = nil
     var displayID: UInt32? = nil
     var inputDevice: String? = nil
     var outputDevice: String? = nil
@@ -77,10 +81,12 @@ struct PlaySettings: Codable {
     @Published var frameRateFallbackNote = ""
     private var fallbackQueued=false
     @Published var running = false
+    @Published var page:Page? = .connection
     @Published var logs = ""
     @Published var credentialsReady = false
     @Published var readingPassword = false
     @Published var networkStatus = "尚未读取网络"
+    @Published var passwordStatus = ""
     @Published var phoneChoices: [PhoneChoice] = []
     @Published var usbDevices: [String] = []
     @Published var usbStage = "接收服务未启动"
@@ -88,6 +94,9 @@ struct PlaySettings: Codable {
     private let locationManager = CLLocationManager()
     private var networkRequestPending = false
     private var usbTimer: Timer?
+    private var connectedUSBIDs = Set<String>()
+    var currentUSBIDs:Set<String> {connectedUSBIDs}
+    private var automaticStartReady = false
     private var process: Process?
     private var input: Pipe?
     private var output: Pipe?
@@ -101,6 +110,7 @@ struct PlaySettings: Codable {
         locationManager.delegate = self
         try? FileManager.default.createDirectory(at: authDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if let data = try? Data(contentsOf: configURL), let decoded = try? JSONDecoder().decode(PlaySettings.self, from:data) { settings = decoded }
+        MacPlayLocalization.language=settings.language ?? "system"
         if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
         if settings.resolution == "3840x2160" { settings.resolution="native" }
         configureRemoteCommands(); refreshHardware(); installBundledCredentials(); updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
@@ -178,7 +188,39 @@ struct PlaySettings: Codable {
     }
     func showMainWindow() {
         for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {window.makeKeyAndOrderFront(nil)}
-        NSApp.activate(ignoringOtherApps:true)
+        NSRunningApplication.current.activate(options:.activateIgnoringOtherApps)
+    }
+    func persistPreferences() {
+        guard let data=try? JSONEncoder().encode(settings) else {return}
+        try? data.write(to:configURL,options:.atomic)
+        try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)
+    }
+    func setLanguage(_ value:String) {
+        guard ["system","zh-Hans","zh-Hant","en"].contains(value) else {return}
+        MacPlayLocalization.language=value
+        settings.language=value
+        persistPreferences()
+        if let data=try? JSONSerialization.data(withJSONObject:["command":"language","language":MacPlayLocalization.effectiveLanguage]),let line=String(data:data,encoding:.utf8){command(line)}
+        MacPlayApplicationDelegate.shared?.preferencesChanged()
+    }
+    func enableAutomaticUSBStart() {
+        guard !automaticStartReady else {return}
+        automaticStartReady=true
+        startForUSBIfNeeded(connectedUSBIDs)
+    }
+    func startForUSBIfNeeded(_ devices:Set<String>) {
+        guard automaticStartReady,settings.autoStartUSB == true,!running,!devices.isEmpty else {return}
+        let selected=settings.selectedPhone ?? settings.lastPhone
+        let preferred=phoneChoices.first(where:{$0.id==selected})
+        if settings.selectedPhone != nil,preferred?.usb == nil {return}
+        if let serial=preferred?.usb {
+            guard devices.contains(serial.replacingOccurrences(of:"-",with:"").lowercased()) else {return}
+        } else {
+            guard devices.count==1,let serial=devices.first,let phone=phoneChoices.first(where:{$0.usb?.replacingOccurrences(of:"-",with:"").lowercased()==serial}) else {return}
+            settings.selectedPhone=phone.id
+        }
+        settings.wireless=false
+        start()
     }
     func configureRemoteCommands() {
         let center=MPRemoteCommandCenter.shared()
@@ -318,13 +360,13 @@ struct PlaySettings: Codable {
     func readSavedNetworkPassword() {
         guard !readingPassword else { return }
         if currentNetworkIsEnterprise {
-            networkStatus="当前网络使用802.1X企业认证（用户名/密码或证书）。MacPlay的无线握手不支持发送这类凭据，请改用个人Wi-Fi、热点或USB连接。"
+            passwordStatus="当前网络使用802.1X企业认证（用户名/密码或证书）。MacPlay的无线握手不支持发送这类凭据，请改用个人Wi-Fi、热点或USB连接。"
             return
         }
         let ssid=settings.ssid
-        guard !ssid.isEmpty else {networkStatus="请先读取当前网络名称。";return}
+        guard !ssid.isEmpty else {passwordStatus="请先读取当前网络名称。";return}
         readingPassword=true
-        networkStatus="正在读取钥匙串；如有系统提示，请授权MacPlay访问该网络密码。"
+        passwordStatus="正在读取钥匙串；如有系统提示，请授权MacPlay访问该网络密码。"
         Task {
             let result=await Task.detached { () -> (OSStatus, String?) in
                 var length: UInt32=0
@@ -340,16 +382,19 @@ struct PlaySettings: Codable {
                 return (status,password)
             }.value
             readingPassword=false
-            guard settings.ssid==ssid else {networkStatus="网络已切换，请重新读取密码。";return}
+            guard settings.ssid==ssid else {passwordStatus="网络已切换，请重新读取密码。";return}
             if result.0==errSecSuccess,let password=result.1,!password.isEmpty {
                 settings.password=password
-                networkStatus="已读取保存的密码，点击“应用并重新连接”使用网络凭据。"
+                passwordStatus="已读取保存的密码，点击“应用并重新连接”使用网络凭据。"
+            } else if result.0==errSecSuccess {
+                passwordStatus="钥匙串未返回可用密码，请手动填写。"
             } else if result.0==errSecItemNotFound {
-                networkStatus="钥匙串未找到该网络的可读取密码，请手动填写。"
+                passwordStatus="钥匙串未找到该网络的可读取密码，请手动填写。"
             } else if result.0==errSecUserCanceled || result.0==errSecAuthFailed || result.0==errSecInteractionNotAllowed {
-                networkStatus="未获准读取网络密码，请重新授权或手动填写。"
+                passwordStatus="未获准读取网络密码（系统状态码\(result.0)），请重新授权或手动填写。"
             } else {
-                networkStatus="无法读取网络密码（系统状态码\(result.0)），请手动填写。"
+                let explanation=SecCopyErrorMessageString(result.0,nil) as String? ?? ""
+                passwordStatus="无法读取网络密码（系统状态码\(result.0)），请手动填写。"+(explanation.isEmpty ? "" : "\n"+explanation)
             }
         }
     }
@@ -372,6 +417,7 @@ struct PlaySettings: Codable {
         }
         defer {IOObjectRelease(iterator)}
         var phones:[String]=[]
+        var serials=Set<String>()
         var choices=settings.phones ?? []
         while case let device=IOIteratorNext(iterator), device != 0 {
             defer {IOObjectRelease(device)}
@@ -379,6 +425,7 @@ struct PlaySettings: Codable {
             if value.localizedCaseInsensitiveContains("iPhone") {
                 phones.append(value)
                 if let serial=IORegistryEntryCreateCFProperty(device,"USB Serial Number" as CFString,kCFAllocatorDefault,0)?.takeRetainedValue() as? String {
+                    serials.insert(serial.replacingOccurrences(of:"-",with:"").lowercased())
                     if !choices.contains(where:{$0.usb?.replacingOccurrences(of:"-",with:"")==serial.replacingOccurrences(of:"-",with:"")}) {choices.append(PhoneChoice(id:"usb:"+serial,name:value,usb:serial))}
                 }
             }
@@ -393,7 +440,10 @@ struct PlaySettings: Codable {
             }
         }
         phoneChoices=choices
+        let added=serials.subtracting(connectedUSBIDs)
+        connectedUSBIDs=serials
         if changed {usbError="";usbStage=running ? "等待USB握手，请保持iPhone解锁" : "接收服务未启动"}
+        startForUSBIfNeeded(added)
     }
     var usbStatus: String {
         guard !usbDevices.isEmpty else {return "未检测到USB连接的iPhone"}
@@ -422,7 +472,10 @@ struct PlaySettings: Codable {
         settings.targetBluetooth=phone?.bluetooth
         settings.targetUSB=phone?.usb
         if settings.targetUSB==nil && !settings.wireless && phone==nil {
-            let usbChoices=phoneChoices.filter{$0.usb != nil}
+            let usbChoices=phoneChoices.filter{phone in
+                guard let serial=phone.usb else {return false}
+                return connectedUSBIDs.contains(serial.replacingOccurrences(of:"-",with:"").lowercased())
+            }
             if usbChoices.count>1 {throw NSError(domain:"MacPlay",code:5,userInfo:[NSLocalizedDescriptionKey:"检测到多台USB连接的iPhone，请先选择要连接的设备。"])}
             if usbChoices.count==1 {settings.targetUSB=usbChoices.first?.usb}
         }
@@ -435,7 +488,7 @@ struct PlaySettings: Codable {
     func start(isFallback:Bool=false) {
         if !isFallback {frameRateFallbackNote=""}
         fallbackQueued=false
-        stop();inspectCredentials()
+        stop(restoreMain:false);inspectCredentials()
         settings.bluetoothMAC=IOBluetoothHostController.default()?.addressAsString()?.replacingOccurrences(of:"-",with:":") ?? ""
         guard credentialsReady else {status="缺少认证文件";detail="请在诊断页面导入有使用权限的配套认证文件。";return}
         if settings.wireless && currentNetworkIsEnterprise {
@@ -449,6 +502,7 @@ struct PlaySettings: Codable {
             guard let resources=Bundle.main.resourceURL else {throw NSError(domain:"MacPlay",code:1,userInfo:[NSLocalizedDescriptionKey:"找不到应用资源目录"])}
             let task=Process();task.executableURL=resources.appendingPathComponent("runtime/MacPlayReceiver.app/Contents/MacOS/MacPlayReceiver");task.arguments=[resources.appendingPathComponent("engine/main.js").path]
             var environment=ProcessInfo.processInfo.environment;environment["MACPLAY_RESOURCES"]=resources.path;environment["MACPLAY_DATA"]=directory.path
+            environment["MACPLAY_LANGUAGE"]=MacPlayLocalization.effectiveLanguage
             let gstLibPath: String = {
                 #if arch(x86_64)
                 let x64Path = resources.appendingPathComponent("gstreamer/macos-x64/lib")
@@ -476,18 +530,26 @@ struct PlaySettings: Codable {
                 }
             }
             task.terminationHandler={ [weak self] task in Task { @MainActor in
-                guard self?.process === task else {return};self?.running=false;self?.clearNowPlaying();self?.showMainWindow()
+                guard self?.process === task else {return};self?.stop()
                 if task.terminationStatus != 0 {self?.status="接收进程已退出";self?.detail="请查看诊断日志。"}
             }}
             try task.run();running=true;usbStage="等待USB握手，请保持iPhone解锁";usbError="";status="正在启动接收服务";detail=settings.wireless ? "准备蓝牙握手与共用Wi-Fi连接。" : "准备USB连接与配件认证。"
         } catch {status="启动失败";detail=error.localizedDescription}
     }
-    func stop() {
-        if let task=process,task.isRunning {try? input?.fileHandleForWriting.write(contentsOf:Data("stop\n".utf8));task.terminate();task.waitUntilExit()}
+    func stop(restoreMain:Bool=true) {
+        if let task=process,task.isRunning {
+            // Give the receiver time to close its window and USB/Bluetooth helpers
+            // before starting another receiver on the same ports.
+            try? input?.fileHandleForWriting.write(contentsOf:Data("stop\n".utf8))
+            let deadline=Date().addingTimeInterval(2)
+            while task.isRunning && Date()<deadline {Thread.sleep(forTimeInterval:0.01)}
+            if task.isRunning {kill(task.processIdentifier,SIGKILL)}
+            task.waitUntilExit()
+        }
         output?.fileHandleForReading.readabilityHandler=nil;process=nil;input=nil;output=nil;running=false;pending.removeAll()
         status="接收已停止";detail="可以调整设置后重新启动。"
         usbStage="接收服务未启动";usbError=""
-        clearNowPlaying();showMainWindow()
+        clearNowPlaying();if restoreMain {page = .connection;showMainWindow()}
     }
     func consume(_ data:Data) {
         pending.append(data)
@@ -496,6 +558,7 @@ struct PlaySettings: Codable {
             if let eventData=line.data(using:.utf8),let event=(try? JSONSerialization.jsonObject(with:eventData)) as? [String:Any] {
                 if let kind=event["type"] as? String,kind=="seekResult" {publishNowPlaying(event);continue}
                 if let kind=event["type"] as? String,kind=="nowplaying" || kind=="albumart" {continue}
+                if event["showMain"] as? Bool == true {showMainWindow();continue}
                 if event["disconnected"] as? Bool == true {stop();return}
             }
             if let data=line.data(using:.utf8),let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:String] {
@@ -541,7 +604,7 @@ struct PlaySettings: Codable {
     }
     func command(_ command:String){try? input?.fileHandleForWriting.write(contentsOf:Data((command+"\n").utf8))}
     func importCredentials() {
-        let panel=NSOpenPanel();panel.canChooseFiles=true;panel.canChooseDirectories=false;panel.allowsMultipleSelection=true;panel.message="选择identity.pk8和certificate.p7b"
+        let panel=NSOpenPanel();panel.canChooseFiles=true;panel.canChooseDirectories=false;panel.allowsMultipleSelection=true;panel.message=L("选择identity.pk8和certificate.p7b")
         guard panel.runModal() == .OK else {return}
         for source in panel.urls where ["identity.pk8","certificate.p7b"].contains(source.lastPathComponent) {
             do {let data=try Data(contentsOf:source);let target=authDirectory.appendingPathComponent(source.lastPathComponent);try data.write(to:target,options:.atomic);try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:target.path)}catch{detail=error.localizedDescription}
@@ -551,124 +614,140 @@ struct PlaySettings: Codable {
 }
 
 enum Page: String,CaseIterable,Identifiable {
-    case connection="连接",display="显示",audio="音频",diagnostics="诊断"
+    case connection="连接",display="显示",audio="音频",about="关于"
     var id:String{rawValue}
-    var icon:String {switch self{case .connection:return "iphone.radiowaves.left.and.right";case .display:return "display";case .audio:return "speaker.wave.2";case .diagnostics:return "stethoscope"}}
+    var icon:String {switch self{case .connection:return "iphone.radiowaves.left.and.right";case .display:return "display";case .audio:return "speaker.wave.2";case .about:return "info.circle"}}
 }
 
 struct SettingsView: View {
     @ObservedObject var model:PlayModel
-    @State private var page:Page? = .connection
+    @StateObject private var updates=MacPlayUpdates()
     var body:some View {
         NavigationSplitView {
-            List(Page.allCases,selection:$page){ item in Label(item.rawValue,systemImage:item.icon).tag(item) }
+            List(Page.allCases,selection:$model.page){ item in Label(L(item.rawValue),systemImage:item.icon).tag(item) }
                 .navigationTitle("MacPlay").navigationSplitViewColumnWidth(min:150,ideal:165,max:200)
         } detail: {
             VStack(spacing:0) {
                 Form {
-                    switch page ?? .connection {
+                    switch model.page ?? .connection {
                     case .connection:
-                        Section("接收端") {
-                            LabeledContent("状态",value:model.status)
-                            Text(model.detail).foregroundStyle(.secondary).font(.callout).textSelection(.enabled)
-                            Picker("iPhone",selection:Binding(get:{model.settings.selectedPhone ?? "auto"},set:{model.settings.selectedPhone=$0=="auto" ? nil : $0})) {
-                                Text("自动（上次连接的iPhone）").tag("auto")
+                        Section(L("接收端")) {
+                            LabeledContent(L("状态"),value:L(model.status))
+                            Text(L(model.detail)).foregroundStyle(.secondary).font(.callout).textSelection(.enabled)
+                            Picker(L("iPhone"),selection:Binding(get:{model.settings.selectedPhone ?? "auto"},set:{model.settings.selectedPhone=$0=="auto" ? nil : $0})) {
+                                Text(L("自动（上次连接的iPhone）")).tag("auto")
                                 ForEach(model.phoneChoices){phone in Text(phone.name+"（"+String(phone.id.suffix(5))+"）").tag(phone.id)}
                             }
-                            Button("刷新iPhone列表"){model.refreshUSB()}
-                            Text("自动模式优先连接上次成功显示画面的iPhone。切换设备后点击“应用并重新连接”。").font(.callout).foregroundStyle(.secondary)
-                            Picker("连接方式",selection:$model.settings.wireless) {
-                                Text("有线CarPlay").tag(false)
-                                Text("无线CarPlay").tag(true)
+                            Button(L("刷新iPhone列表")){model.refreshUSB()}
+                            Text(L("自动模式优先连接上次成功显示画面的iPhone。切换设备后点击“应用并重新连接”。")).font(.callout).foregroundStyle(.secondary)
+                            Picker(L("连接方式"),selection:$model.settings.wireless) {
+                                Text(L("有线CarPlay")).tag(false)
+                                Text(L("无线CarPlay")).tag(true)
                             }.pickerStyle(.segmented)
-                            Text(model.settings.wireless ? "通过蓝牙配对后使用共用Wi-Fi连接。" : "通过USB数据线连接，无需填写Wi-Fi信息。").foregroundStyle(.secondary)
+                            Text(L(model.settings.wireless ? "通过蓝牙配对后使用共用Wi-Fi连接。" : "通过USB数据线连接，无需填写Wi-Fi信息。")).foregroundStyle(.secondary)
                         }
-                        if !model.settings.wireless {Section("USB直连") {
-                            LabeledContent("设备",value:model.usbStatus)
-                            if !model.usbDevices.isEmpty {LabeledContent("连接阶段",value:model.usbError.isEmpty ? model.usbStage : model.usbError)}
-                            Button("刷新USB设备"){model.refreshUSB()}
-                            Text("连接数据线后点击“启动接收”，并在iPhone上解锁、确认信任。USB设备检测会自动刷新。").foregroundStyle(.secondary)
+                        Section(L("应用")) {
+                            Picker(L("语言"),selection:Binding(get:{model.settings.language ?? "system"},set:{model.setLanguage($0)})) {
+                                Text(L("跟随系统")).tag("system")
+                                Text(L("简体中文")).tag("zh-Hans")
+                                Text(L("繁體中文")).tag("zh-Hant")
+                                Text(L("English")).tag("en")
+                            }
+                            Toggle(L("USB接入时自动启动CarPlay"),isOn:Binding(get:{model.settings.autoStartUSB ?? false},set:{model.settings.autoStartUSB=$0;model.persistPreferences();if $0 {model.startForUSBIfNeeded(model.currentUSBIDs)}}))
+                            Toggle(L("允许后台运行"),isOn:Binding(get:{model.settings.backgroundEnabled ?? false},set:{model.settings.backgroundEnabled=$0;MacPlayApplicationDelegate.shared?.preferencesChanged()}))
+                            Text(L("关闭主窗口后继续接收，可从菜单栏图标打开窗口或退出。自动启动需要MacPlay保持运行，并在iPhone上解锁和完成信任。")).font(.callout).foregroundStyle(.secondary)
+                        }
+                        if !model.settings.wireless {Section(L("USB直连")) {
+                            LabeledContent(L("设备"),value:L(model.usbStatus))
+                            if !model.usbDevices.isEmpty {LabeledContent(L("连接阶段"),value:L(model.usbError.isEmpty ? model.usbStage : model.usbError))}
+                            Button(L("刷新USB设备")){model.refreshUSB()}
+                            Text(L("连接数据线后点击“启动接收”，并在iPhone上解锁、确认信任。USB设备检测会自动刷新。")).foregroundStyle(.secondary)
                         }}
                         if model.settings.wireless {
-                            Section("共用Wi-Fi") {
-                                TextField("网络名称（SSID）",text:$model.settings.ssid)
-                                SecureField("网络密码",text:$model.settings.password)
-                                TextField("网络接口",text:$model.settings.wifiInterface)
-                                Stepper("信道：\(model.settings.channel)",value:$model.settings.channel,in:1...196)
+                            Section(L("共用Wi-Fi")) {
+                                TextField(L("网络名称（SSID）"),text:$model.settings.ssid)
+                                SecureField(L("网络密码"),text:$model.settings.password)
+                                TextField(L("网络接口"),text:$model.settings.wifiInterface)
+                                Stepper(L("信道：\(model.settings.channel)"),value:$model.settings.channel,in:1...196)
                                 HStack {
-                                    Button("读取当前网络"){model.detectNetwork(requestPermission:true)}
-                                    Button(model.readingPassword ? "正在读取密码…" : "读取已保存密码"){model.readSavedNetworkPassword()}.disabled(model.readingPassword || model.settings.ssid.isEmpty)
-                                    Button("打开定位设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)}
-                                    Button("打开蓝牙设置"){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.BluetoothSettings")!)}
-                                }.fixedSize(horizontal:true,vertical:false)
-                                Text(model.networkStatus).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                                Text("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。").font(.callout).foregroundStyle(.secondary)
+                                    Button(L("读取当前网络")){model.detectNetwork(requestPermission:true)}
+                                    Button(L(model.readingPassword ? "正在读取密码…" : "读取已保存密码")){model.readSavedNetworkPassword()}.disabled(model.readingPassword || model.settings.ssid.isEmpty)
+                                    Button(L("打开定位设置")){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)}
+                                    Button(L("打开蓝牙设置")){NSWorkspace.shared.open(URL(string:"x-apple.systempreferences:com.apple.BluetoothSettings")!)}
+                                }
+                                Text(L(model.networkStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                                if !model.passwordStatus.isEmpty {Text(L(model.passwordStatus)).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)}
+                                Text(L("Mac与iPhone需加入同一Wi-Fi，并在两端确认蓝牙配对码。不会创建名为MacPlay的Wi-Fi。填写SSID与共享密码，或授权读取已保存的密码。802.1X企业Wi-Fi的用户名、个人密码或证书不能作为共享密码发送。")).font(.callout).foregroundStyle(.secondary)
                             }
                         }
                     case .display:
-                        Section("显示器") {
-                            Picker("显示位置",selection:Binding(get:{model.settings.displayID ?? model.displays.first?.id ?? 0},set:{model.settings.displayID=$0;model.updateResolution()})) {
+                        Section(L("显示器")) {
+                            Picker(L("显示位置"),selection:Binding(get:{model.settings.displayID ?? model.displays.first?.id ?? 0},set:{model.settings.displayID=$0;model.updateResolution()})) {
                                 ForEach(model.displays){Text($0.label).tag($0.id)}
                             }
-                            if let panel=model.displays.first(where:{$0.id==model.settings.displayID}) {Text(panel.details).font(.callout).foregroundStyle(.secondary)}
-                            Text("默认内建显示器；切换显示器后应用并重新连接。").font(.callout).foregroundStyle(.secondary)
+                            if let panel=model.displays.first(where:{$0.id==model.settings.displayID}) {Text(L(panel.details)).font(.callout).foregroundStyle(.secondary)}
+                            Text(L("默认内建显示器；切换显示器后应用并重新连接。")).font(.callout).foregroundStyle(.secondary)
                         }
-                        Section("视频分辨率") {
-                            Picker("分辨率",selection:$model.settings.resolution) {
-                                Text("屏幕原生像素（避开刘海）").tag("native")
+                        Section(L("视频分辨率")) {
+                            Picker(L("分辨率"),selection:$model.settings.resolution) {
+                                Text(L("屏幕原生像素（避开刘海）")).tag("native")
                                 ForEach(["1280x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
-                                Text("自定义").tag("custom")
+                                Text(L("自定义")).tag("custom")
                             }.onChange(of:model.settings.resolution){_,_ in model.updateResolution()}
                             if model.settings.resolution == "custom" {
-                                TextField("宽度（像素）",value:$model.settings.width,format:.number)
-                                TextField("高度（像素）",value:$model.settings.height,format:.number)
+                                TextField(L("宽度（像素）"),value:$model.settings.width,format:.number)
+                                TextField(L("高度（像素）"),value:$model.settings.height,format:.number)
                             }
-                            LabeledContent("请求像素",value:"\(model.settings.width)×\(model.settings.height)")
-                            Text("原生像素模式默认全屏并避开刘海。其他分辨率按屏幕真实物理像素换算固定窗口，允许拖动标题栏移动，但不能调整窗口大小；超过可见区域的尺寸无法启动。").font(.callout).foregroundStyle(.secondary)
+                            LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
+                            Text(L("原生像素模式默认全屏并避开刘海。其他分辨率按屏幕真实物理像素换算固定窗口，允许拖动标题栏移动，但不能调整窗口大小；超过可见区域的尺寸无法启动。")).font(.callout).foregroundStyle(.secondary)
                         }
-                        Section("流畅度") {
-                            Picker("最高帧率",selection:$model.settings.fps){ForEach([30,60,90,120],id:\.self){Text("\($0)fps").tag($0)}}
-                            Text("高帧率为实验请求：120fps协商失败后改用90fps，90fps仍失败则改用60fps。发起CarPlay连接后20秒未启动视频视为失败。").font(.callout).foregroundStyle(.secondary)
-                            if !model.frameRateFallbackNote.isEmpty {Text(model.frameRateFallbackNote).font(.callout).foregroundStyle(.secondary)}
-                            Text("上报所选分辨率与固定窗口对应的真实物理尺寸，不提供倍率调节。请关闭CarPlay自身的“智能缩放显示”以避免自动缩放。帧率为请求上限。").font(.callout).foregroundStyle(.secondary)
+                        Section(L("流畅度")) {
+                            Picker(L("最高帧率"),selection:$model.settings.fps){ForEach([30,60,90,120],id:\.self){Text(L("\($0)fps")).tag($0)}}
+                            Text(L("高帧率为实验请求：120fps协商失败后改用90fps，90fps仍失败则改用60fps。发起CarPlay连接后20秒未启动视频视为失败。")).font(.callout).foregroundStyle(.secondary)
+                            if !model.frameRateFallbackNote.isEmpty {Text(L(model.frameRateFallbackNote)).font(.callout).foregroundStyle(.secondary)}
+                            Text(L("上报所选分辨率与固定窗口对应的真实物理尺寸，不提供倍率调节。请关闭CarPlay自身的“智能缩放显示”以避免自动缩放。帧率为请求上限。")).font(.callout).foregroundStyle(.secondary)
                         }
                     case .audio:
-                        Section("CarPlay声音") {
-                            Toggle("播放iPhone音频",isOn:$model.settings.audioEnabled).onChange(of:model.settings.audioEnabled){_,_ in model.applyLiveAudio()}
-                            LabeledContent("媒体音量"){Slider(value:$model.settings.volume,in:0...1).onChange(of:model.settings.volume){_,_ in model.applyLiveAudio()};Text("\(Int(model.settings.volume*100))%").monospacedDigit().frame(width:42)}
-                            LabeledContent("通话音量"){Slider(value:Binding(get:{model.settings.callVolume ?? 1},set:{model.settings.callVolume=$0;model.applyLiveAudio()}),in:0...1);Text("\(Int((model.settings.callVolume ?? 1)*100))%").monospacedDigit().frame(width:42)}
-                            Picker("输出设备",selection:Binding(get:{model.settings.outputDevice ?? ""},set:{model.settings.outputDevice=$0})) {Text("系统默认设备").tag("");ForEach(model.audioOutputs){Text($0.name).tag($0.id)}}
-                            Picker("输入设备",selection:Binding(get:{model.settings.inputDevice ?? ""},set:{model.settings.inputDevice=$0})) {Text("系统默认设备").tag("");ForEach(model.audioInputs){Text($0.name).tag($0.id)}}
-                            Button("刷新设备"){model.refreshHardware()}
-                            Text("媒体与通话音量实时生效；设备切换后应用并重新连接。默认跟随系统设备，麦克风使用需要系统授权。").font(.callout).foregroundStyle(.secondary)
+                        Section(L("CarPlay声音")) {
+                            Toggle(L("播放iPhone音频"),isOn:$model.settings.audioEnabled).onChange(of:model.settings.audioEnabled){_,_ in model.applyLiveAudio()}
+                            LabeledContent(L("媒体音量")){Slider(value:$model.settings.volume,in:0...1).onChange(of:model.settings.volume){_,_ in model.applyLiveAudio()};Text(L("\(Int(model.settings.volume*100))%")).monospacedDigit().frame(width:42)}
+                            LabeledContent(L("通话音量")){Slider(value:Binding(get:{model.settings.callVolume ?? 1},set:{model.settings.callVolume=$0;model.applyLiveAudio()}),in:0...1);Text(L("\(Int((model.settings.callVolume ?? 1)*100))%")).monospacedDigit().frame(width:42)}
+                            Picker(L("输出设备"),selection:Binding(get:{model.settings.outputDevice ?? ""},set:{model.settings.outputDevice=$0})) {Text(L("系统默认设备")).tag("");ForEach(model.audioOutputs){Text($0.name).tag($0.id)}}
+                            Picker(L("输入设备"),selection:Binding(get:{model.settings.inputDevice ?? ""},set:{model.settings.inputDevice=$0})) {Text(L("系统默认设备")).tag("");ForEach(model.audioInputs){Text($0.name).tag($0.id)}}
+                            Button(L("刷新设备")){model.refreshHardware()}
+                            Text(L("媒体与通话音量实时生效；设备切换后应用并重新连接。默认跟随系统设备，麦克风使用需要系统授权。")).font(.callout).foregroundStyle(.secondary)
                         }
-                    case .diagnostics:
-                        Section("认证与日志") {
-                            LabeledContent("认证文件",value:model.credentialsReady ? "文件已就绪，等待iPhone验证" : "缺少文件")
-                            HStack {Button("导入认证文件"){model.importCredentials()};Button("打开认证目录"){NSWorkspace.shared.open(model.authDirectory)}}
-                            HStack {Button("打开日志"){NSWorkspace.shared.open(model.logURL)};Button("刷新状态"){model.inspectCredentials()}}
-                            Text("安装包内置实验性认证材料；本机已导入的文件优先使用。").font(.callout).foregroundStyle(.secondary)
-                        }
-                        Section("最近日志") {ScrollView {Text(model.logs.isEmpty ? "暂无日志":model.logs).font(.system(.caption,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.frame(height:180)}
-                        Section("关于") {LabeledContent("MacPlay",value:"1.1.0");Text("基于LIVI，参考DiPlay。保留原作者版权，沿用GPL-3.0-or-later。支持有线与无线CarPlay连接。").font(.callout).foregroundStyle(.secondary)}
+                    case .about:
+                        MacPlayAboutView(model:model,updates:updates)
                     }
                 }.formStyle(.grouped)
+                if model.page != .about {
                 Divider()
                 HStack {
-                    if model.running {Button("停止接收"){model.stop()};Button("显示画面"){model.command("show")}}
+                    if model.running {Button(L("停止接收")){model.stop()};Button(L("显示画面")){model.command("show")}}
                     Spacer()
-                    Button(model.running ? "应用并重新连接" : "启动接收"){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
-            }.navigationTitle((page ?? .connection).rawValue)
-        }.frame(minWidth:900,minHeight:560).onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB();model.refreshHardware()}
+                }
+            }.navigationTitle(L((model.page ?? .connection).rawValue))
+        }.frame(minWidth:900,minHeight:560)
+        .environment(\.locale,Locale(identifier:MacPlayLocalization.effectiveLanguage))
+        .onChange(of:model.settings.ssid){_,_ in model.passwordStatus=""}
+        .onAppear{updates.check(automatic:true)}
+        .alert(L("发现新版本"),isPresented:$updates.showPrompt){
+            Button(L(updates.installer == nil ? "查看发行说明" : "下载更新")){updates.openDownload()}
+            Button(L("稍后"),role:.cancel){updates.dismissPrompt()}
+        } message:{Text("MacPlay \(updates.release?.version?.description ?? "")")}
+        .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in updates.check(automatic:true);model.detectNetwork();model.refreshUSB();model.refreshHardware();if model.settings.language == nil || model.settings.language == "system" {model.setLanguage("system")}}
     }
 }
 
 @main struct MacPlayApp: App {
+    @NSApplicationDelegateAdaptor(MacPlayApplicationDelegate.self) private var delegate
     @StateObject private var model=PlayModel()
     var body:some Scene {
-        WindowGroup("MacPlay") {SettingsView(model:model).onReceive(NotificationCenter.default.publisher(for:NSApplication.willTerminateNotification)){_ in model.stop()}}
+        Window("MacPlay",id:"main") {SettingsView(model:model).onAppear{delegate.install(model)}}
             .defaultSize(width:820,height:650)
-            .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button("启动接收"){model.start()};Button("停止接收"){model.stop()}}}
+            .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button(L("启动接收")){model.start()};Button(L("停止接收")){model.stop()}}}
     }
 }

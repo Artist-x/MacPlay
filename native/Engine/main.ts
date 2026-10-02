@@ -11,7 +11,7 @@ import { addon, setVideoCallback } from './media'
 import { displayConfig } from './display'
 import { FrameRateFallback } from './frameRateFallback'
 import { acceptsPhone } from './phoneSelection'
-import { audioLevel, disconnectedAfterVideo } from './runtimeControls'
+import { audioLevel, disconnectedAfterSession } from './runtimeControls'
 
 const resources=process.env.MACPLAY_RESOURCES!
 const settings=JSON.parse(fs.readFileSync(path.join(dataDir,'settings.json'),'utf8'))
@@ -25,12 +25,14 @@ const sessions=new Set<CpStack>()
 let active: CpStack|undefined
 let wiredReady=false
 let videoReady=false
+let sessionReady=false
 let phoneInfo: {name:string;deviceId:string}|undefined
 const frameRateGuard=new FrameRateFallback(settings.fps,fps=>{
  if(stopping||videoReady)return
  process.stdout.write(JSON.stringify({fallbackFps:String(fps),status:`${settings.fps}fps协商未启动视频，改用${fps}fps重连`,detail:"将自动降低帧率请求并重新连接。"})+"\n")
 })
 addon.macplaySelectDisplayOptions(settings.displayID||0)
+addon.macplaySetWindowLanguage(process.env.MACPLAY_LANGUAGE||'system')
 addon.macplayConfigureWindowOptions(settings.width,settings.height,settings.screenPixelWidth,settings.screenPixelHeight,settings.resolution==='native')
 setVideoCallback(()=>{frameRateGuard.videoStarted();videoReady=true;if(phoneInfo?.deviceId){settings.targetBluetooth=phoneInfo.deviceId.replace(/-/g,':').toLowerCase();process.stdout.write(JSON.stringify({connectedPhone:phoneInfo.deviceId,phoneName:phoneInfo.name,connectedUSB:settings.wireless?'':settings.targetUSB||''})+'\n');}log('已收到视频配置','CarPlay画面窗口已打开');if(wiredReady)usb('已接收CarPlay视频，画面窗口已打开')},settings.width/settings.height)
 const authDir=path.join(dataDir,'authentication')
@@ -50,7 +52,7 @@ for(const stream of [helper.stdout,helper.stderr]) readline.createInterface({inp
  if(line.includes('wired: MFi auth succeeded')) usb('配件认证已通过，正在建立CarPlay会话')
  if(line.includes('wired: CarPlayStartSession sent')) usb('已发送CarPlay连接参数')
  if(line.includes('usbmuxd carkit failed')) usb('USB通信失败','无法打开iPhone的CarPlay服务，请解锁并确认信任后重新连接。')
- if(line.includes('unplugged')) {wiredReady=false;usb('iPhone已拔出');if(videoReady){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}
+ if(line.includes('unplugged')) {const hadWired=wiredReady;wiredReady=false;usb('iPhone已拔出');if(!settings.wireless && hadWired && (videoReady||sessionReady)){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}
 })
 helper.on('error',e=>log('连接后端启动失败',e.message))
 helper.on('exit',code=>{if(!stopping){log('连接后端已退出',String(code));process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}})
@@ -61,21 +63,26 @@ const server=net.createServer(socket=>{
  stack.deviceFilter=id=>acceptsPhone(settings.targetBluetooth,id,!!active && active!==stack)
  stack.on('device-info',(info:{name:string;deviceId:string})=>{active=stack;phoneInfo=info})
  stack.setVideoActive(true);stack.setAudioActive(settings.audioEnabled)
- stack.on('session-active',()=>{frameRateGuard.negotiationStarted();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
- stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;log('连接已断开','重新启动接收可再次连接');if(disconnectedAfterVideo(hadVideo,stopping)){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
- stack.on('host-ui-requested',()=>log('返回设置','可切换至MacPlay设置窗口'))
+ stack.on('session-active',()=>{sessionReady=true;frameRateGuard.negotiationStarted();stack.setStreamVolume(3,settings.volume??1,0);stack.setStreamVolume(2,settings.callVolume??1,0);log('CarPlay会话已建立','等待视频流');if(usbSession)usb('CarPlay会话已建立，等待视频流')})
+ stack.on('session-ended',()=>{const hadVideo=videoReady;frameRateGuard.failed();sessions.delete(stack);if(active===stack){active=undefined;videoReady=false;sessionReady=false;log('连接已断开','重新启动接收可再次连接');if(disconnectedAfterSession(hadVideo,stopping,settings.fps)){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}}if(usbSession)usb('CarPlay会话已断开，可点击“应用并重新连接”')})
+ stack.on('host-ui-requested',()=>{process.stdout.write(JSON.stringify({showMain:true})+'\n');log('返回设置','已打开MacPlay设置窗口')})
  stack.on('error',(e:Error)=>log('会话错误',e.message))
  stack.attachSocket(socket)
 })
 server.on('error',e=>{log('接收服务启动失败',e.message);shutdown()})
 server.listen({port:17000,host:'::',ipv6Only:false},()=>log('等待iPhone连接',settings.wireless?'无线CarPlay接收已启用，请在系统蓝牙中配对iPhone':'有线CarPlay接收已启用，请连接USB数据线'))
 const pump=setInterval(()=>{
- try {const events:number[]=addon.macplayPumpEvents();for(let i=0;i<events.length;i+=3)active?.sendTouches([{x:events[i],y:events[i+1],down:events[i+2]===1,id:0}])}catch(e){console.error(e)}
+ try {
+  const events:number[]=addon.macplayPumpEvents()
+  for(let i=0;i<events.length;i+=3)active?.sendTouches([{x:events[i],y:events[i+1],down:events[i+2]===1,id:0}])
+  if(addon.macplayTakeWindowAction()===1 && !stopping){process.stdout.write(JSON.stringify({disconnected:true})+'\n');shutdown()}
+ }catch(e){console.error(e)}
 },8)
 readline.createInterface({input:process.stdin}).on('line',line=>{
  if(line==='show'){if(videoReady)addon.macplayWindowHandle(settings.width/settings.height);else log('等待CarPlay视频','视频尚未建立，暂不打开空白画面窗口。')}
  try {
   const update=JSON.parse(line)
+  if(update.command==='language' && typeof update.language==='string')addon.macplaySetWindowLanguage(update.language)
   if(update.command==='seek' && active && videoReady && phoneInfo?.deviceId) {
    const ms=Number(update.positionMs),id=String(update.requestId||'')
    if(Number.isInteger(ms)&&ms>=0&&ms<=0xffffffff&&id) {

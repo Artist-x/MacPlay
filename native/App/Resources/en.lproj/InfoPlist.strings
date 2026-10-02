@@ -1,0 +1,5 @@
+"NSBluetoothAlwaysUsageDescription" = "MacPlay uses Mac Bluetooth to establish a CarPlay connection with iPhone.";
+"NSLocalNetworkUsageDescription" = "MacPlay receives CarPlay audio and video from iPhone over the local network.";
+"NSLocationUsageDescription" = "macOS requires location permission to read the current Wi-Fi network name. MacPlay uses this permission only to read network information and does not store your location.";
+"NSLocationWhenInUseUsageDescription" = "macOS requires location permission to read the current Wi-Fi network name. MacPlay uses this permission only to read network information and does not store your location.";
+"NSMicrophoneUsageDescription" = "MacPlay uses the microphone for Siri voice control and calls.";

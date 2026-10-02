@@ -3,6 +3,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
 #include <deque>
+#include <string>
 #include "macplay_scroll.h"
 
 static NSWindow *macplayWindow;
@@ -17,6 +18,22 @@ static double mpPanelWidth = 1920, mpPanelHeight = 1080;
 static bool mpDefaultFullscreen = false;
 static bool mpEnteringFullscreen = false;
 static bool mpHideAfterFullscreen = false;
+static bool mpClosingWindow = false;
+static bool mpClosePromptOpen = false;
+static bool mpCloseRequested = false;
+static int mpWindowAction = 0;
+static std::string mpLanguage;
+
+static NSString *mpCloseText(NSString *simplified, NSString *traditional, NSString *english) {
+ std::string language=mpLanguage;
+ if(language.empty() || language=="system") {
+  NSString *preferred=NSLocale.preferredLanguages.firstObject ?: @"en";
+  language=preferred.UTF8String;
+ }
+ if(language.rfind("zh-Hant",0)==0 || language.rfind("zh-TW",0)==0 || language.rfind("zh-HK",0)==0 || language.rfind("zh-MO",0)==0)return traditional;
+ if(language.rfind("zh",0)==0)return simplified;
+ return english;
+}
 
 @interface MacPlayVideoWindow : NSWindow
 @end
@@ -106,6 +123,26 @@ static void mpLogWindow() {
 @interface MacPlayWindowDelegate : NSObject <NSWindowDelegate>
 @end
 @implementation MacPlayWindowDelegate
+- (BOOL)windowShouldClose:(NSWindow *)window {
+ if(mpClosingWindow)return YES;
+ if(mpClosePromptOpen || mpCloseRequested)return NO;
+ mpClosePromptOpen=true;
+ NSAlert *alert=[NSAlert new];
+ alert.alertStyle=NSAlertStyleInformational;
+ alert.messageText=mpCloseText(@"您确定要断开与iPhone的连接吗？",@"您確定要中斷與iPhone的連線嗎？",@"Disconnect from iPhone?");
+ alert.informativeText=mpCloseText(@"断开后将关闭CarPlay画面，并停止接收。",@"中斷後將關閉CarPlay畫面，並停止接收。",@"This closes the CarPlay window and stops reception.");
+ [alert addButtonWithTitle:mpCloseText(@"断开连接",@"中斷連線",@"Disconnect")];
+ [alert addButtonWithTitle:mpCloseText(@"取消",@"取消",@"Cancel")];
+ alert.buttons[0].keyEquivalent=@"";
+ alert.buttons[1].keyEquivalent=@"\r";
+ [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse result) {
+  if(window!=macplayWindow)return;
+  mpClosePromptOpen=false;
+  if(mpClosingWindow)return;
+  if(result==NSAlertFirstButtonReturn) {mpCloseRequested=true;mpWindowAction=1;}
+ }];
+ return NO;
+}
 - (void)windowDidEnterFullScreen:(NSNotification *)notification {
   (void)notification; mpEnteringFullscreen = false; mpLogWindow();
 }
@@ -159,8 +196,15 @@ static void mpApplyRenderScale(NSView *view) {
 @end
 
 extern "C" void macplay_select_display(uint32_t id) {mpDisplayID=id;}
+extern "C" void macplay_set_language(const char *language) {mpLanguage=language ?: "";}
+extern "C" int macplay_take_window_action() {int action=mpWindowAction;mpWindowAction=0;return action;}
 extern "C" void macplay_close_window() {
- if(macplayWindow){[macplayWindow orderOut:nil];[macplayWindow close];macplayWindow=nil;mpWindowDelegate=nil;}
+ mpClosingWindow=true;
+ if(macplayWindow){
+  if(NSWindow *sheet=macplayWindow.attachedSheet){[NSApp endSheet:sheet returnCode:NSModalResponseCancel];[sheet orderOut:nil];}
+  [macplayWindow setDelegate:nil];[macplayWindow orderOut:nil];[macplayWindow close];macplayWindow=nil;mpWindowDelegate=nil;
+ }
+ mpWindowAction=0;mpCloseRequested=false;mpClosePromptOpen=false;
  mpEnteringFullscreen=false;mpHideAfterFullscreen=false;
 }
 extern "C" void macplay_configure_window(double width, double height,
@@ -412,6 +456,7 @@ extern "C" uintptr_t macplay_window(double aspect) {
  [MacPlayVideoApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
  mpSetWindowAspect(aspect);
  if(!macplayWindow) {
+  mpClosingWindow=false;
   NSWindowStyleMask style=mpDefaultFullscreen ? NSWindowStyleMaskBorderless :
     NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;
   macplayWindow=[[MacPlayVideoWindow alloc] initWithContentRect:NSMakeRect(0,0,1100,1100/mpAspect) styleMask:style backing:NSBackingStoreBuffered defer:NO];
@@ -427,6 +472,7 @@ extern "C" uintptr_t macplay_window(double aspect) {
   [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
  [macplayWindow makeKeyAndOrderFront:nil];
+ [NSApp activateIgnoringOtherApps:YES];
  if(mpDefaultFullscreen && !(macplayWindow.styleMask & NSWindowStyleMaskFullScreen) && !mpEnteringFullscreen) {
   mpEnteringFullscreen=true;
   dispatch_async(dispatch_get_main_queue(), ^{[macplayWindow toggleFullScreen:nil];});

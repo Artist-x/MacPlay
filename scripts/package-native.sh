@@ -23,9 +23,10 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>29</string>
+<key>CFBundleShortVersionString</key><string>1.2.0</string><key>CFBundleVersion</key><string>33</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
+<key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
 <key>NSMicrophoneUsageDescription</key><string>MacPlay使用麦克风进行语音控制和通话。</string>
 </dict></plist>
@@ -67,6 +68,8 @@ for required in "${REQUIRED_ARCHES[@]}"; do
 done
 
 cp assets/icons/mac/macplay.icns "$RES/MacPlay.icns"
+cp -R native/App/Resources/*.lproj "$RES/"
+cp -R native/App/Resources/*.lproj "$RECEIVER/Contents/Resources/"
 mkdir -p "$RES/icons"
 cp assets/icons/carplay/macplay-256.png assets/icons/carplay/macplay-512.png "$RES/icons/"
 mkdir -p "$RES/authentication"
@@ -81,9 +84,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string><key>CFBundleVersion</key><string>29</string>
+<key>CFBundleShortVersionString</key><string>1.2.0</string><key>CFBundleVersion</key><string>33</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
 <key>NSBluetoothAlwaysUsageDescription</key><string>MacPlay通过Mac蓝牙与iPhone建立CarPlay连接。</string>
 <key>NSLocalNetworkUsageDescription</key><string>MacPlay通过本地网络接收iPhone的CarPlay音视频。</string>
 <key>NSLocationUsageDescription</key><string>macOS要求定位权限才能读取当前Wi-Fi名称。MacPlay仅用此权限读取网络信息，不保存位置信息。</string>
@@ -104,5 +108,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
 
- hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.1.0-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.0-${TARGET_ARCH}.dmg"
 fi

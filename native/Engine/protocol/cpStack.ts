@@ -420,6 +420,14 @@ export class CpStack extends EventEmitter {
     if (types.length === 0) {
       console.log('[cpStack] TEARDOWN (session)')
       this._teardown(session)
+      // iPhone may leave the control socket open after ending CarPlay. Notify
+      // the host after the RTSP response is written, without waiting for close.
+      setImmediate(() => {
+        if (!this._closing && session === this._liveSession) {
+          this._liveSession = null
+          this.emit('session-ended')
+        }
+      })
       return { status: 200 }
     }
     console.log(`[cpStack] TEARDOWN streams ${types.join(',')}`)

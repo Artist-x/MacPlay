@@ -1,0 +1,5 @@
+"NSBluetoothAlwaysUsageDescription" = "MacPlay透過Mac藍牙與iPhone建立CarPlay連線。";
+"NSLocalNetworkUsageDescription" = "MacPlay透過區域網路接收iPhone的CarPlay影音。";
+"NSLocationUsageDescription" = "macOS要求定位權限才能讀取目前Wi-Fi名稱。MacPlay僅用此權限讀取網路資訊，不儲存位置資訊。";
+"NSLocationWhenInUseUsageDescription" = "macOS要求定位權限才能讀取目前Wi-Fi名稱。MacPlay僅用此權限讀取網路資訊，不儲存位置資訊。";
+"NSMicrophoneUsageDescription" = "MacPlay使用麥克風進行Siri語音控制和通話。";

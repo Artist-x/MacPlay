@@ -452,6 +452,9 @@ unsafe extern "C" {
  fn macplay_pump();
  fn macplay_select_display(id:u32);
  fn macplay_close_window();
+ fn macplay_set_language(language: *const std::ffi::c_char);
+ #[link_name="macplay_take_window_action"]
+ fn macplay_window_action() -> i32;
  fn macplay_input(x: *mut f64,y: *mut f64,down: *mut i32) -> i32;
 }
 #[cfg(target_os="macos")]
@@ -480,3 +483,11 @@ pub fn macplay_select_display_options(id:u32) {unsafe {macplay_select_display(id
 #[cfg(target_os="macos")]
 #[napi]
 pub fn macplay_close_video_window() {unsafe {macplay_close_window();}}
+#[cfg(target_os="macos")]
+#[napi]
+pub fn macplay_set_window_language(language:String) {
+ if let Ok(value)=std::ffi::CString::new(language) {unsafe {macplay_set_language(value.as_ptr());}}
+}
+#[cfg(target_os="macos")]
+#[napi]
+pub fn macplay_take_window_action() -> i32 {unsafe {macplay_window_action()}}
