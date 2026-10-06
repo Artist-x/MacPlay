@@ -491,3 +491,11 @@ pub fn macplay_set_window_language(language:String) {
 #[cfg(target_os="macos")]
 #[napi]
 pub fn macplay_take_window_action() -> i32 {unsafe {macplay_window_action()}}
+
+// Counters advance only for decrypted media, not for playback or repeated display frames.
+static VIDEO_ACTIVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static AUDIO_ACTIVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[napi]
+pub fn media_activity() -> Vec<u32> {
+    vec![VIDEO_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed), AUDIO_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed)]
+}

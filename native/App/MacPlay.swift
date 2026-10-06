@@ -33,6 +33,7 @@ struct PhoneChoice: Codable, Identifiable {
 
 struct PlaySettings: Codable {
     var language: String? = nil
+    var autoReconnect: Bool? = nil
     var autoStartUSB: Bool? = nil
     var backgroundEnabled: Bool? = nil
     var displayID: UInt32? = nil
@@ -79,7 +80,17 @@ struct PlaySettings: Codable {
     @Published var status = "尚未启动接收"
     @Published var detail = "连接iPhone后启动接收端。"
     @Published var frameRateFallbackNote = ""
+    private var reconnectTimer:Timer?
+    private var reconnectBackoff=ReconnectBackoff()
+    private var reconnectCycle=false
+    private var successfulSettings:PlaySettings?
+    private var appliedSettings:PlaySettings?
+    private var attemptID=""
+    private var attemptStart=Date()
+    private var logWrite:DispatchWorkItem?
+    private var mediaPublish:DispatchWorkItem?
     private var fallbackQueued=false
+    var receivingOrWaiting:Bool {running || reconnectCycle}
     @Published var running = false
     @Published var page:Page? = .connection
     @Published var logs = ""
@@ -186,6 +197,15 @@ struct PlaySettings: Codable {
         if let data=try? JSONSerialization.data(withJSONObject:message),let line=String(data:data,encoding:.utf8){command(line)}
         if let data=try? JSONEncoder().encode(settings){try? data.write(to:configURL,options:.atomic);try? FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)}
     }
+    func showCarPlayWindow() {
+        guard let task=process,task.isRunning else {return}
+        MacPlayApplicationDelegate.shared?.prepareCarPlayPresentation()
+        if let receiver=NSRunningApplication(processIdentifier:task.processIdentifier) {
+            NSApp.yieldActivation(to:receiver)
+            receiver.activate(options:.activateIgnoringOtherApps)
+        }
+        command("show")
+    }
     func showMainWindow() {
         for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {window.makeKeyAndOrderFront(nil)}
         NSRunningApplication.current.activate(options:.activateIgnoringOtherApps)
@@ -209,7 +229,7 @@ struct PlaySettings: Codable {
         startForUSBIfNeeded(connectedUSBIDs)
     }
     func startForUSBIfNeeded(_ devices:Set<String>) {
-        guard automaticStartReady,settings.autoStartUSB == true,!running,!devices.isEmpty else {return}
+        guard automaticStartReady,settings.autoStartUSB == true,!running,!reconnectCycle,!devices.isEmpty else {return}
         let selected=settings.selectedPhone ?? settings.lastPhone
         let preferred=phoneChoices.first(where:{$0.id==selected})
         if settings.selectedPhone != nil,preferred?.usb == nil {return}
@@ -247,6 +267,7 @@ struct PlaySettings: Codable {
         if let data=try? JSONSerialization.data(withJSONObject:message),let line=String(data:data,encoding:.utf8){pendingSeekID=id;command(line)}
     }
     func clearNowPlaying() {
+        mediaPublish?.cancel();mediaPublish=nil
         metadataFeed?.stop();metadataFeed=nil
         mediaDiagnostic=""
         playingState=NowPlayingState();artworkBytes=nil;pendingSeekID=nil;nowPlaying=[:]
@@ -265,6 +286,13 @@ struct PlaySettings: Codable {
             playingState.receive(event,at:now)
             if oldID != playingState.trackID || oldApp != playingState.appID {pendingSeekID=nil}
         }
+        guard mediaPublish==nil else {return}
+        let work=DispatchWorkItem { [weak self] in self?.mediaPublish=nil;self?.flushNowPlaying() }
+        mediaPublish=work;DispatchQueue.main.asyncAfter(deadline:.now()+0.1,execute:work)
+    }
+    private func flushNowPlaying() {
+        guard running else {return}
+        playingState.advance(to:ProcessInfo.processInfo.systemUptime)
         nowPlaying[MPMediaItemPropertyTitle]=playingState.title
         nowPlaying[MPMediaItemPropertyArtist]=playingState.artist
         nowPlaying[MPMediaItemPropertyAlbumTitle]=playingState.album
@@ -286,7 +314,7 @@ struct PlaySettings: Codable {
         let diagnostic="总时长\(Int(playingState.duration))秒，封面\(nowPlaying[MPMediaItemPropertyArtwork] == nil ? "未收到" : "已发布")，进度跳转\(playingState.canSeek ? "可用" : "不可用")"
         if diagnostic != mediaDiagnostic {
             mediaDiagnostic=diagnostic;logs += "[媒体] \(diagnostic)\n"
-            try? logs.write(to:logURL,atomically:true,encoding:.utf8)
+            queueLogWrite()
         }
     }
     func inspectCredentials() { credentialsReady = ["identity.pk8","certificate.p7b"].allSatisfy { FileManager.default.fileExists(atPath: authDirectory.appendingPathComponent($0).path) } }
@@ -328,6 +356,7 @@ struct PlaySettings: Codable {
         }
         if let channel=interface.wlanChannel(){settings.channel=Int(channel.channelNumber)}
         if let ssid=interface.ssid(), !ssid.isEmpty {
+            if settings.ssid != ssid {settings.password="";passwordStatus="网络已切换，请读取或填写当前网络密码。"}
             settings.ssid=ssid
             settings.accessPointMAC=interface.bssid()
             networkStatus="已读取当前Wi-Fi名称和信道"
@@ -485,23 +514,85 @@ struct PlaySettings: Codable {
         let data=try JSONEncoder().encode(settings);try data.write(to:configURL,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:configURL.path)
     }
-    func start(isFallback:Bool=false) {
+    func setAutoReconnect(_ enabled:Bool) {
+        settings.autoReconnect=enabled;persistPreferences()
+        if !enabled {let waiting=reconnectCycle && !running;cancelReconnect(clearSession:!running);if waiting {status="接收已停止";detail=""}}
+    }
+    private func cancelReconnect(clearSession:Bool=true) {
+        reconnectTimer?.invalidate();reconnectTimer=nil;reconnectBackoff.reset();reconnectCycle=false;if clearSession {successfulSettings=nil}
+    }
+    private func scheduleReconnect() {
+        guard settings.autoReconnect == true,successfulSettings?.wireless == true,reconnectTimer==nil else {return}
+        reconnectCycle=true
+        let seconds=reconnectBackoff.nextDelay()
+        let previousReason=status
+        status="等待自动重连";detail=L(previousReason)+"\n"+L("将在\(seconds)秒后重试连接。")
+        appendDiagnostic("reconnect-wait seconds=\(seconds) attempt=\(reconnectBackoff.attempts)")
+        reconnectTimer=Timer.scheduledTimer(withTimeInterval:Double(seconds),repeats:false){[weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else {return};self.reconnectTimer=nil
+                guard self.settings.autoReconnect == true,let config=self.successfulSettings else {return}
+                self.refreshUSB()
+                let draft=self.settings
+                self.settings=config;self.settings.autoReconnect=true
+                self.start(isAutomatic:true)
+                self.settings=draft
+                self.persistPreferences()
+            }
+        }
+    }
+    private func passiveDisconnect(_ reason:String) {
+        let retry=ReconnectBackoff.permitted(enabled:settings.autoReconnect == true,successfulWirelessSession:successfulSettings?.wireless == true)
+        stop(preserveReconnect:retry)
+        status=reason;detail=""
+        appendDiagnostic("disconnected: \(reason)")
+        if retry {scheduleReconnect()}
+    }
+    private func appendDiagnostic(_ value:String) {
+        logs += "[\(attemptID)] +\(Int(Date().timeIntervalSince(attemptStart)*1000))ms \(value)\n"
+        queueLogWrite()
+    }
+    private func queueLogWrite() {
+        let lines=logs.split(separator:"\n",omittingEmptySubsequences:false)
+        if lines.count>1000 {logs=lines.suffix(1000).joined(separator:"\n")}
+        guard logWrite==nil else {return}
+        let work=DispatchWorkItem { [weak self] in
+            guard let self else {return};self.logWrite=nil
+            try? MacPlayUpdates.redactedLog(self.logs).write(to:self.logURL,atomically:true,encoding:.utf8)
+        }
+        logWrite=work;DispatchQueue.main.asyncAfter(deadline:.now()+0.3,execute:work)
+    }
+    func start(isFallback:Bool=false,isAutomatic:Bool=false) {
+        if !isFallback && !isAutomatic {cancelReconnect()}
+        defer {if !running && reconnectCycle {scheduleReconnect()}}
+
         if !isFallback {frameRateFallbackNote=""}
         fallbackQueued=false
-        stop(restoreMain:false);inspectCredentials()
+        stop(restoreMain:false,preserveReconnect:isFallback || isAutomatic);inspectCredentials()
         settings.bluetoothMAC=IOBluetoothHostController.default()?.addressAsString()?.replacingOccurrences(of:"-",with:":") ?? ""
-        guard credentialsReady else {status="缺少认证文件";detail="请在诊断页面导入有使用权限的配套认证文件。";return}
+        guard credentialsReady else {status="缺少认证文件";detail="请在关于页面导入有使用权限的配套认证文件。";return}
         if settings.wireless && currentNetworkIsEnterprise {
             status="当前Wi-Fi采用企业认证";detail="无线CarPlay握手不支持802.1X用户名/密码或证书，请改用个人Wi-Fi、热点或USB连接。";return
         }
         if settings.wireless && settings.ssid.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty {
             status="无线连接缺少网络信息";detail="请先读取当前Wi-Fi名称。";return
         }
+        if settings.wireless,let network=CWWiFiClient.shared().interface(withName:settings.wifiInterface),let actual=network.ssid(),!actual.isEmpty,actual != settings.ssid {
+            status="当前Wi-Fi与连接配置不一致";detail="请读取当前网络并填写对应密码。";return
+        }
         do {
             try save()
+            appliedSettings=settings
+            let sessionURL=directory.appendingPathComponent("session-settings.json")
+            try JSONEncoder().encode(settings).write(to:sessionURL,options:.atomic)
+            try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:sessionURL.path)
+            attemptID=UUID().uuidString.prefix(8).description;attemptStart=Date()
+            appendDiagnostic("starting wireless=\(settings.wireless) interface=\(settings.wifiInterface) channel=\(settings.channel) video=\(settings.width)x\(settings.height) fps=\(settings.fps)")
             guard let resources=Bundle.main.resourceURL else {throw NSError(domain:"MacPlay",code:1,userInfo:[NSLocalizedDescriptionKey:"找不到应用资源目录"])}
             let task=Process();task.executableURL=resources.appendingPathComponent("runtime/MacPlayReceiver.app/Contents/MacOS/MacPlayReceiver");task.arguments=[resources.appendingPathComponent("engine/main.js").path]
             var environment=ProcessInfo.processInfo.environment;environment["MACPLAY_RESOURCES"]=resources.path;environment["MACPLAY_DATA"]=directory.path
+            environment["MACPLAY_SETTINGS_PATH"]=sessionURL.path
+            environment["MACPLAY_ATTEMPT"]=attemptID
             environment["MACPLAY_LANGUAGE"]=MacPlayLocalization.effectiveLanguage
             let gstLibPath: String = {
                 #if arch(x86_64)
@@ -530,13 +621,13 @@ struct PlaySettings: Codable {
                 }
             }
             task.terminationHandler={ [weak self] task in Task { @MainActor in
-                guard self?.process === task else {return};self?.stop()
-                if task.terminationStatus != 0 {self?.status="接收进程已退出";self?.detail="请查看诊断日志。"}
+                guard self?.process === task else {return};self?.passiveDisconnect("接收进程已退出")
             }}
             try task.run();running=true;usbStage="等待USB握手，请保持iPhone解锁";usbError="";status="正在启动接收服务";detail=settings.wireless ? "准备蓝牙握手与共用Wi-Fi连接。" : "准备USB连接与配件认证。"
         } catch {status="启动失败";detail=error.localizedDescription}
     }
-    func stop(restoreMain:Bool=true) {
+    func stop(restoreMain:Bool=true,preserveReconnect:Bool=false) {
+        if !preserveReconnect {cancelReconnect()}
         if let task=process,task.isRunning {
             // Give the receiver time to close its window and USB/Bluetooth helpers
             // before starting another receiver on the same ports.
@@ -558,22 +649,34 @@ struct PlaySettings: Codable {
             if let eventData=line.data(using:.utf8),let event=(try? JSONSerialization.jsonObject(with:eventData)) as? [String:Any] {
                 if let kind=event["type"] as? String,kind=="seekResult" {publishNowPlaying(event);continue}
                 if let kind=event["type"] as? String,kind=="nowplaying" || kind=="albumart" {continue}
+                if event["showCarPlay"] as? Bool == true {
+                    successfulSettings=appliedSettings;reconnectBackoff.reset();reconnectCycle=false
+                    reconnectTimer?.invalidate();reconnectTimer=nil
+                    showCarPlayWindow();continue
+                }
                 if event["showMain"] as? Bool == true {showMainWindow();continue}
-                if event["disconnected"] as? Bool == true {stop();return}
+                if event["disconnected"] as? Bool == true {
+                    if event["manual"] as? Bool == true {stop()}
+                    else {passiveDisconnect(event["reason"] as? String ?? "连接已断开")}
+                    return
+                }
             }
             if let data=line.data(using:.utf8),let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:String] {
                 if let message=value["status"] {status=message;detail=value["detail"] ?? ""}
                 if let nextText=value["fallbackFps"],let next=Int(nextText),running,!fallbackQueued,
-                   (settings.fps==120 && next==90 || settings.fps==90 && next==60) {
+                   (appliedSettings?.fps==120 && next==90 || appliedSettings?.fps==90 && next==60) {
                     fallbackQueued=true
                     let failedTask=process
-                    let previous=settings.fps
+                    let previous=appliedSettings?.fps ?? settings.fps
                     Task { @MainActor [weak self] in
-                        guard let self,self.running,self.process === failedTask,self.settings.fps==previous else {return}
+                        guard let self,self.running,self.process === failedTask,self.appliedSettings?.fps==previous else {return}
+                        let draft=self.settings
+                        self.settings=self.appliedSettings ?? self.settings
                         self.settings.fps=next
                         let note="\(previous)fps协商未启动视频，已改用\(next)fps重连。"
                         self.frameRateFallbackNote += self.frameRateFallbackNote.isEmpty ? note : "\n"+note
                         self.start(isFallback:true)
+                        self.settings=draft;self.persistPreferences()
                     }
                 }
                 if let deviceId=value["connectedPhone"],!deviceId.isEmpty {
@@ -591,6 +694,8 @@ struct PlaySettings: Codable {
                     let name=value["phoneName"].flatMap{$0.isEmpty ? nil : $0} ?? "iPhone"
                     known.removeAll{$0.id==bt || $0.bluetooth==bt || (udid != nil && $0.usb==udid)}
                     known.append(PhoneChoice(id:bt,name:name,bluetooth:bt,usb:udid))
+                    successfulSettings?.phones=known;successfulSettings?.lastPhone=bt
+                    successfulSettings?.selectedPhone=bt;successfulSettings?.targetBluetooth=bt;successfulSettings?.targetUSB=udid
                     settings.phones=known;settings.lastPhone=bt
                     if settings.selectedPhone != nil {settings.selectedPhone=bt}
                     refreshUSB()
@@ -598,9 +703,9 @@ struct PlaySettings: Codable {
                 }
                 readUSBEvent(value)
             }
-            logs += line+"\n";if logs.count>24000 {logs=String(logs.suffix(18000))}
+            logs += MacPlayUpdates.redactedLog(line)+"\n"
         }
-        try? logs.write(to:logURL,atomically:true,encoding:.utf8)
+        queueLogWrite()
     }
     func command(_ command:String){try? input?.fileHandleForWriting.write(contentsOf:Data((command+"\n").utf8))}
     func importCredentials() {
@@ -665,7 +770,8 @@ struct SettingsView: View {
                         }}
                         if model.settings.wireless {
                             Section(L("共用Wi-Fi")) {
-                                TextField(L("网络名称（SSID）"),text:$model.settings.ssid)
+                                Toggle(L("无线连接被动断开时自动重连"),isOn:Binding(get:{model.settings.autoReconnect ?? false},set:{model.setAutoReconnect($0)}))
+                                TextField(L("网络名称（SSID）"),text:Binding(get:{model.settings.ssid},set:{if model.settings.ssid != $0 {model.settings.password=""};model.settings.ssid=$0}))
                                 SecureField(L("网络密码"),text:$model.settings.password)
                                 TextField(L("网络接口"),text:$model.settings.wifiInterface)
                                 Stepper(L("信道：\(model.settings.channel)"),value:$model.settings.channel,in:1...196)
@@ -724,7 +830,8 @@ struct SettingsView: View {
                 if model.page != .about {
                 Divider()
                 HStack {
-                    if model.running {Button(L("停止接收")){model.stop()};Button(L("显示画面")){model.command("show")}}
+                    if model.receivingOrWaiting {Button(L("停止接收")){model.stop()}}
+                    if model.running {Button(L("显示画面")){model.showCarPlayWindow()}}
                     Spacer()
                     Button(L(model.running ? "应用并重新连接" : "启动接收")){model.start()}.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }.padding(16)
@@ -733,12 +840,12 @@ struct SettingsView: View {
         }.frame(minWidth:900,minHeight:560)
         .environment(\.locale,Locale(identifier:MacPlayLocalization.effectiveLanguage))
         .onChange(of:model.settings.ssid){_,_ in model.passwordStatus=""}
-        .onAppear{updates.check(automatic:true)}
+        .onAppear{updates.startAutomaticChecks()}
         .alert(L("发现新版本"),isPresented:$updates.showPrompt){
             Button(L(updates.installer == nil ? "查看发行说明" : "下载更新")){updates.openDownload()}
             Button(L("稍后"),role:.cancel){updates.dismissPrompt()}
         } message:{Text("MacPlay \(updates.release?.version?.description ?? "")")}
-        .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in updates.check(automatic:true);model.detectNetwork();model.refreshUSB();model.refreshHardware();if model.settings.language == nil || model.settings.language == "system" {model.setLanguage("system")}}
+        .onReceive(NotificationCenter.default.publisher(for:NSApplication.didBecomeActiveNotification)){_ in model.detectNetwork();model.refreshUSB();model.refreshHardware();if model.settings.language == nil || model.settings.language == "system" {model.setLanguage("system")}}
     }
 }
 

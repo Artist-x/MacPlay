@@ -10,7 +10,8 @@ const plist=require(path.join(engine,'protocol/bplist.js'));
 // an iPhone. All media operations stay in this isolated module context.
 function fixture(){
  const closedVideo=[];
- const media={onAudioReceiverStarted(){},gstHost:{onAudioStarted(){}},
+ let counts=[0,0];
+ const media={addon:{mediaActivity:()=>counts},onAudioReceiverStarted(){},gstHost:{onAudioStarted(){}},
   closeScreenReceiver(id){closedVideo.push(id)}};
  const module={exports:{}};
  const localRequire=id=>{
@@ -20,13 +21,13 @@ function fixture(){
   return {};
  };
  vm.runInNewContext(fs.readFileSync(path.join(engine,'protocol/cpStack.js'),'utf8'),
-  {module,exports:module.exports,require:localRequire,Buffer,setImmediate,clearInterval,
+  {module,exports:module.exports,require:localRequire,Buffer,setImmediate,clearInterval,process,
    console:{log(){},warn(){}}});
  const stack=new module.exports.CpStack({mfi:{}});
  const session={audioMeta:[],screenNativeId:7,screenInProcess:true,
   clusterScreenNativeId:null,screen:{stop(){}}};
  stack._liveSession=session;
- return {stack,session,closedVideo};
+ return {stack,session,closedVideo,setCounts:(value)=>{counts=value}};
 }
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 
@@ -61,4 +62,17 @@ test('stopping the host suppresses an already queued passive disconnect',async()
  stack.on('session-ended',()=>ended++);
  stack._handleTeardown({body:Buffer.alloc(0)},session);stack.stop();
  await turn();assert.equal(ended,0);
+});
+
+test('no negotiated heartbeat keeps static video connected',()=>{
+ const {stack,session}=fixture();session.lastCtrlReadNs=1n;let ends=0;stack.on('session-ended',()=>ends++);
+ stack._checkHeartbeat(session);assert.equal(ends,0);
+});
+test('established heartbeat timeout ends only the live session once',()=>{
+ const {stack,session}=fixture();session.lastCtrlReadNs=1n;session.timing={lastActivityNs:1n,stop(){}};session.mediaCounts=[0,0];let ends=0;
+ stack.on('session-ended',()=>ends++);stack._checkHeartbeat(session);stack._checkHeartbeat(session);assert.equal(ends,1);
+});
+test('active decrypted media prevents a heartbeat false positive',()=>{
+ const {stack,session,setCounts}=fixture();session.lastCtrlReadNs=1n;session.timing={lastActivityNs:1n,stop(){}};session.mediaCounts=[0,0];setCounts([1,0]);
+ stack.on('session-ended',()=>assert.fail());stack._checkHeartbeat(session);
 });

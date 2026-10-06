@@ -8,3 +8,7 @@ test('pairing and authentication failures cannot downgrade',()=>{const g=new Fra
 test('video startup cancels pending retry',async()=>{const g=new FrameRateFallback(120,()=>assert.fail(),5);g.negotiationStarted();g.videoStarted();g.failed();await wait()});
 test('manual stop cancels pending retry',async()=>{const g=new FrameRateFallback(90,()=>assert.fail(),5);g.negotiationStarted();g.cancel();g.failed();await wait()});
 test('30 and 60 failures never retry',async()=>{for(const fps of [30,60]){const g=new FrameRateFallback(fps,()=>assert.fail(),5);g.negotiationStarted();g.failed();await wait()}});
+
+const {VideoWaitDeadline}=require('../../build/engine/frameRateFallback.js');
+test('final video wait expires once despite repeated negotiation',async()=>{let calls=0;const d=new VideoWaitDeadline(5,()=>calls++);d.arm();d.arm();await wait();d.arm();await wait();assert.equal(calls,1)});
+test('video or manual stop cancels final wait',async()=>{const d=new VideoWaitDeadline(5,()=>assert.fail());d.arm();d.cancel();d.arm();await wait()});

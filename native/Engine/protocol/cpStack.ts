@@ -1,3 +1,4 @@
+import { addon } from '../media'
 /**
  * CpStack — the CarPlay Wi-Fi session engine (skeleton).
  *
@@ -188,6 +189,10 @@ interface CpSession {
   eventCseq: number
   codecEmitted: boolean
   mainStreamReady: boolean
+  ended?: boolean
+  lastMediaReadNs?: bigint
+  mediaCounts?: number[]
+  heartbeatEstablished?: boolean
   lastCtrlReadNs: bigint
   heartbeat: ReturnType<typeof setInterval> | null
 }
@@ -249,6 +254,7 @@ export class CpStack extends EventEmitter {
   attachSocket(sock: net.Socket): void {
     const peer = `${sock.remoteAddress}:${sock.remotePort}`
     console.log(`[cpStack] control connection from ${peer}`)
+    sock.setKeepAlive(true,5000)
     this._conns.add(sock)
     const session: CpSession = {
       pairSetup: new PairSetup(),
@@ -286,6 +292,7 @@ export class CpStack extends EventEmitter {
     sock.on('data', (chunk: Buffer) => {
       session.lastCtrlReadNs = process.hrtime.bigint()
       chain = chain.then(async () => {
+        if(this._closing || session.ended || sock.destroyed)return
         // Once verified, incoming bytes are encrypted frames; decrypt to plaintext RTSP.
         if (session.cipher) {
           session.encBuf = Buffer.concat([session.encBuf, chunk])
@@ -306,6 +313,7 @@ export class CpStack extends EventEmitter {
             console.warn(`[cpStack] handler error for ${req.method} ${req.path}:`, e)
             out = buildResponse(req, { status: 500 })
           }
+          if(this._closing || session.ended && req.method !== 'TEARDOWN' || sock.destroyed)return
           sock.write(session.cipher ? session.cipher.encrypt(out) : out)
           // pair-verify M4 is answered in plaintext; encryption starts on the next message.
           if (!session.cipher && session.pairVerify.controlKeys) {
@@ -314,7 +322,7 @@ export class CpStack extends EventEmitter {
             console.log('[cpStack] control channel encrypted')
           }
         }
-      })
+      }).catch((error)=>{console.warn('[cpStack] request failed',String(error));sock.destroy()})
     })
     sock.on('error', (err) => console.warn(`[cpStack] socket error ${peer}: ${err.message}`))
     sock.on('close', () => {
@@ -329,7 +337,31 @@ export class CpStack extends EventEmitter {
     })
   }
 
+  private _checkHeartbeat(session:CpSession):void {
+    if(this._closing || session!==this._liveSession)return
+    const now=process.hrtime.bigint(), counts:number[]=addon.mediaActivity()
+    if(counts.some((value,index)=>value!==session.mediaCounts?.[index]))session.lastMediaReadNs=now
+    session.mediaCounts=counts
+    const timing=session.timing?.lastActivityNs||0n,keepAlive=session.keepAlive?.lastActivityNs||0n
+    if(!timing&&!keepAlive)return // A static screen without negotiated heartbeats is not a disconnect.
+    if(!session.heartbeatEstablished){session.heartbeatEstablished=true;console.log('[connection] heartbeat established')}
+    const latest=[timing,keepAlive,session.lastCtrlReadNs,session.lastMediaReadNs||0n].reduce((a,b)=>a>b?a:b)
+    if(now-latest<15_000_000_000n)return
+    console.log('[connection] heartbeat timeout idleMs='+Number((now-latest)/1_000_000n))
+    this.emit('disconnect-reason','iPhone网络连接已断开')
+    this._sessionSock.get(session)?.destroy()
+    this._teardown(session);this._liveSession=null;this.emit('session-ended')
+  }
+
+  private _ensureOpen(session:CpSession,cleanup:()=>void):void {
+    if(!this._closing && !session.ended)return
+    cleanup();throw new Error('Session ended during setup')
+  }
+
   private _teardown(session: CpSession): void {
+    if(session.ended)return
+    session.ended=true
+    session.eventSock?.destroy();session.eventSock=null
     if (session.heartbeat) {
       clearInterval(session.heartbeat)
       session.heartbeat = null
@@ -470,6 +502,11 @@ export class CpStack extends EventEmitter {
     if (req.method === 'RECORD') {
       console.log('[cpStack] RECORD (session started)')
       this._liveSession = session
+      if(!session.heartbeat) {
+        session.mediaCounts=addon.mediaActivity()
+        session.heartbeat=setInterval(()=>this._checkHeartbeat(session),1000)
+        session.heartbeat.unref?.()
+      }
       // Event commands are only valid once the session has started (older iOS stalls
       // the bring-up ~5s on a POST /command sent before RECORD). Push the initial
       // night mode now, not on event-channel connect.
@@ -729,6 +766,7 @@ export class CpStack extends EventEmitter {
     // a TCP connection to the event port before it sends the stream-level SETUP.
     const timing = new TimingSync()
     const timingPort = await timing.listen()
+    this._ensureOpen(session,()=>timing.stop())
     session.timing = timing
     // Drive the NTP clock sync against the phone's timing port, or the phone
     // tears the session down after a few seconds.
@@ -737,9 +775,10 @@ export class CpStack extends EventEmitter {
     const eventPort = await this._openEventChannel(session)
     let keepAlivePort = 0
     if (dict.keepAliveLowPower) {
-      const keepAlive = new KeepAliveServer()
+      const keepAlive = new KeepAliveServer(session.peerHost)
       session.keepAlive = keepAlive
       keepAlivePort = await keepAlive.listen()
+      this._ensureOpen(session,()=>keepAlive.stop())
     }
     console.log(
       `[cpStack] SETUP session (timingPort=${timingPort}, eventPort=${eventPort}, keepAlivePort=${keepAlivePort})`
@@ -756,6 +795,7 @@ export class CpStack extends EventEmitter {
   private _openEventChannel(session: CpSession): Promise<number> {
     return new Promise((resolve, reject) => {
       const server = net.createServer((s) => {
+        if(this._closing || session.ended){s.destroy();return}
         console.log('[cpStack] event channel connected')
         // The event connection is encrypted from the first byte with Events keys
         // derived from the pair-verify secret. We use it to push HID (touch) reports.
@@ -796,6 +836,7 @@ export class CpStack extends EventEmitter {
       })
       server.on('error', reject)
       server.listen({ port: 0, host: '::', ipv6Only: false }, () => {
+        if(this._closing || session.ended){server.close();reject(new Error('Session ended during event setup'));return}
         session.event = server
         const addr = server.address()
         resolve(typeof addr === 'object' && addr ? addr.port : 0)
@@ -870,6 +911,7 @@ export class CpStack extends EventEmitter {
   /** The event channel is bidirectional reverse-HTTP: the phone answers our commands and
    *  sends its own requests, each of which gets a response. */
   private _onEventMessage(session: CpSession, msg: RtspRequest): void {
+    session.lastCtrlReadNs=process.hrtime.bigint()
     if (msg.method.startsWith('RTSP/') || msg.method.startsWith('HTTP/')) {
       if (msg.path !== '200')
         console.warn(`[cpStack] event response ${msg.path} ${msg.protocol ?? ''}`)
@@ -1061,6 +1103,7 @@ export class CpStack extends EventEmitter {
     const tunnel = new IapTunnel(shared, seed)
     tunnel.on('iap', (iap: Buffer) => session.iapRelay?.write(iap))
     const dataPort = await tunnel.listen()
+    this._ensureOpen(session,()=>tunnel.stop())
     session.iapTunnel = tunnel
     console.log(`[cpStack] SETUP iAP tunnel (type 130, dataPort=${dataPort}, seed=${seed})`)
     return { type: STREAM_TYPE_DATA, streamID: 1, dataPort }

@@ -5,7 +5,7 @@
 <p align="center">在Mac上显示和操作iPhone的CarPlay界面，支持USB直连与共用Wi-Fi无线连接。</p>
 
 <p align="center">
-  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.2.0-2563eb?style=flat-square" alt="版本1.2.0"></a>
+  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.2.1-2563eb?style=flat-square" alt="版本1.2.1"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-macOS%2014%2B-555555?style=flat-square" alt="运行平台"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="项目许可"></a>
 </p>
@@ -37,8 +37,8 @@
 
 | Mac类型 | 安装包 |
 | --- | --- |
-| AppleM系列 | `MacPlay-1.2.0-arm64.dmg` |
-| Intel | `MacPlay-1.2.0-x86_64.dmg` |
+| AppleM系列 | `MacPlay-1.2.1-arm64.dmg` |
+| Intel | `MacPlay-1.2.1-x86_64.dmg` |
 
 打开DMG，将MacPlay拖入“应用程序”后启动。若macOS拦截，在“系统设置→隐私与安全性”中允许打开。当前包采用本地签名，未经过Apple公证。
 
@@ -68,11 +68,17 @@ MacPlay通过蓝牙引导，再通过共用Wi-Fi传输音视频，不创建名�
 - 点击与触控板：支持点击、拖动和双指滚动，滚动转换为CarPlay触摸滑动。
 - 音频与设备：实时调整媒体和通话音量，分别选择输入/输出设备，默认跟随系统。
 - 系统媒体控件：向macOS播放面板同步歌曲、歌手、专辑、封面、进度和播放状态，支持播放控制及播放器允许的进度跳转。
-- 设备记忆与断开复位：记住上次连接的iPhone；主动停止或已建立会话断开后关闭画面，返回连接主页并恢复“启动接收”。
+- 设备记忆与断开复位：记住上次连接的iPhone；断开后关闭画面并返回连接主页；可选择在无线连接被动断开后自动重连。
 - 语言与后台运行：支持跟随Mac系统、简体中文、繁體中文和English；可选USB接入自动启动及菜单栏常驻。
 - 统一窗口入口：主窗口与CarPlay画面共用MacPlay的Dock入口；关闭CarPlay画面先确认断开，点击CarPlay中的MacPlay图标可打开主窗口。
 
 - 关于与更新：查看版本、检查GitHub正式发行版，按芯片选择安装包，支持自动更新提醒和TXT日志导出。
+
+### 无线自动重连
+
+在“连接→共用Wi-Fi”开启“无线连接被动断开时自动重连”。默认关闭，只回连已成功连接后被动断开的iPhone，使用上次应用的配置。首次等待5秒，失败后按10、20、30、60秒延长间隔；主动停止、确认断开、退出或关闭开关会取消重连。首次连接失败不进入自动重连。
+
+切换Wi-Fi后需要读取或填写新网络密码；同一网络读取密码失败时保留已有输入。最终60fps尝试等待视频超过45秒会结束，避免一直停留在等待界面。
 
 ## 其他平台
 
@@ -97,7 +103,7 @@ CarPlay自身的“设置→显示屏→智能缩放显示”可能改变图标�
 
 在侧栏最后的“关于”页查看版本号、构建号和运行架构。点击“检查更新”读取GitHub正式发行版，按版本号比较，并为当前Mac选择M系列或Intel安装包；通过Rosetta运行时仍优先选择M系列版。没有对应安装包时可打开发行说明。
 
-“自动检查更新”默认开启，应用启动或回到前台时每天检查一次，发现新版在主窗口提示；同一版本确认后不重复提醒。检查失败会显示错误，手动检查不受每日频率限制。点击“下载更新”后通过浏览器下载，退出旧版再替换应用，不自动安装。
+“自动检查更新”默认开启，每次启动检查一次，持续运行时每两小时静默检查。后台检查结果显示在“关于→软件更新”，不弹窗；启动发现新版时提示，同一版本确认后不重复提醒。检查失败会显示错误，手动检查可随时执行。点击“下载更新”后通过浏览器下载，退出旧版再替换应用，不自动安装。
 
 在“关于→日志”点击“导出日志”，选择位置保存TXT。导出当前连接日志，过滤网络密码及常见设备标识，不包含设置文件或认证文件。发送给他人前仍可自行查看导出内容。
 
@@ -118,7 +124,7 @@ CarPlay自身的“设置→显示屏→智能缩放显示”可能改变图标�
 
 ## 认证与数据
 
-1.2.0内置实验性认证材料，首次启动不覆盖本机已有身份。也可在“关于→认证文件→导入认证文件”选择匹配且获准使用的`identity.pk8`与`certificate.p7b`；普通Apple开发者签名证书不能替代配件认证。材料来源见[认证来源](assets/authentication/SOURCE.txt)。公开下载不等于取得再分发授权，公开分发前应确认材料权利。
+1.2.1内置实验性认证材料，首次启动不覆盖本机已有身份。也可在“关于→认证文件→导入认证文件”选择匹配且获准使用的`identity.pk8`与`certificate.p7b`；普通Apple开发者签名证书不能替代配件认证。材料来源见[认证来源](assets/authentication/SOURCE.txt)。公开下载不等于取得再分发授权，公开分发前应确认材料权利。
 
 设置、Wi-Fi密码、设备记录与配对身份保存在本机应用支持目录，不上传到服务器。定位权限用于读取Wi-Fi信息，蓝牙/本地网络用于连接，麦克风用于通话和语音。分享诊断日志前应遮盖手机名称、地址和网络信息。
 
@@ -140,11 +146,11 @@ pnpm run build -- --arch=arm64
 pnpm run build -- --arch=x64
 ~~~
 
-生成`dist/MacPlay.app`和`dist/MacPlay-1.2.0-<arch>.dmg`，架构为`arm64`或`x86_64`。脚本处理SwiftUI应用、蓝牙桥接、Rust后端、音视频模块和Node.js服务，并进行本地签名与DMG打包。
+生成`dist/MacPlay.app`和`dist/MacPlay-1.2.1-<arch>.dmg`，架构为`arm64`或`x86_64`。脚本处理SwiftUI应用、蓝牙桥接、Rust后端、音视频模块和Node.js服务，并进行本地签名与DMG打包。
 
 ## 更新日志
 
-1.2.0加入四档语言选择、USB接入自动启动、菜单栏后台运行、统一Dock窗口入口和关闭画面确认；完善主动/被动断开返回主页、CarPlay中的MacPlay入口及密码读取失败提示。完整变更见[CHANGELOG](CHANGELOG.md)。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
+1.2.1新增可选无线自动重连，完善断线检测、连接状态和等待期限，修正切换网络后的密码匹配，并改进日志、后台更新检查与系统媒体同步。完整变更见[CHANGELOG](CHANGELOG.md)。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
 
 ## 来源与许可
 

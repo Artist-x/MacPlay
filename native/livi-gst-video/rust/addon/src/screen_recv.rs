@@ -55,6 +55,7 @@ impl ScreenSink for Sink {
         if self.retired() {
             return;
         }
+        crate::VIDEO_ACTIVITY.fetch_add(1, Ordering::Relaxed);
         feed::push_video(self.id, nal);
     }
 

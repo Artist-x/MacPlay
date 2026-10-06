@@ -471,8 +471,12 @@ extern "C" uintptr_t macplay_window(double aspect) {
   mpSetWindowAspect(mpAspect);
   [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
- [macplayWindow makeKeyAndOrderFront:nil];
+ if(macplayWindow.isMiniaturized) [macplayWindow deminiaturize:nil];
  [NSApp activateIgnoringOtherApps:YES];
+ [macplayWindow makeKeyAndOrderFront:nil];
+ // Accessory receivers have no Dock activation of their own. Order this normal-level
+ // window across processes once per show request; never make it permanently floating.
+ [macplayWindow orderFrontRegardless];
  if(mpDefaultFullscreen && !(macplayWindow.styleMask & NSWindowStyleMaskFullScreen) && !mpEnteringFullscreen) {
   mpEnteringFullscreen=true;
   dispatch_async(dispatch_get_main_queue(), ^{[macplayWindow toggleFullScreen:nil];});

@@ -42,8 +42,20 @@ struct GitHubRelease: Decodable {
     @Published var exportStatus = ""
     @Published var exportDetail = ""
     @Published var automatic = UserDefaults.standard.object(forKey: "MacPlay.automaticUpdates") as? Bool ?? true
+    private var automaticTimer:Timer?
+    private var didStartupCheck=false
+    func startAutomaticChecks() {
+        guard !didStartupCheck else {return};didStartupCheck=true
+        if automatic {check(automatic:true);scheduleChecks()}
+    }
+    private func scheduleChecks() {
+        automaticTimer?.invalidate()
+        automaticTimer=Timer.scheduledTimer(withTimeInterval:7200,repeats:true){[weak self] _ in
+            MainActor.assumeIsolated {self?.check(automatic:true,silent:true)}
+        }
+    }
     private let defaults = UserDefaults.standard
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.1" }
     var build: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "" }
     var architecture: String {
         #if arch(arm64)
@@ -63,12 +75,11 @@ struct GitHubRelease: Decodable {
     var installer: URL? { release?.installer(arm64: nativeArm64) }
     func setAutomatic(_ enabled: Bool) {
         automatic = enabled; defaults.set(enabled, forKey: "MacPlay.automaticUpdates")
-        if enabled { check(automatic: true) }
+        if enabled { check(automatic: true);scheduleChecks() } else {automaticTimer?.invalidate();automaticTimer=nil;showPrompt=false}
     }
-    func check(automatic isAutomatic: Bool = false) {
+    func check(automatic isAutomatic: Bool = false,silent:Bool=false) {
         guard !checking, !isAutomatic || automatic else { return }
         let now = Date().timeIntervalSince1970
-        if isAutomatic && now - defaults.double(forKey: "MacPlay.lastUpdateCheck") < 86400 { return }
         if isAutomatic { defaults.set(now, forKey: "MacPlay.lastUpdateCheck") }
         checking = true; status = "正在检查更新…"; detail = ""
         Task {
@@ -92,7 +103,7 @@ struct GitHubRelease: Decodable {
                 let arm = nativeArm64
                 release = releases.first { $0.version == latest && $0.installer(arm64: arm) != nil } ?? newest
                 status = "发现新版本"; detail = latest.description
-                if !isAutomatic || automatic && defaults.string(forKey: "MacPlay.notifiedVersion") != latest.description { showPrompt = true }
+                if !silent && (!isAutomatic || automatic && defaults.string(forKey: "MacPlay.notifiedVersion") != latest.description) { showPrompt = true }
             } catch {
                 status = "检查更新失败"; detail = error.localizedDescription
             }

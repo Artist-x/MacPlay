@@ -25,6 +25,7 @@ impl AudioSink for Sink {
     }
 
     fn on_rtp(&mut self, rtp: &[u8], _sample: u32) {
+        crate::AUDIO_ACTIVITY.fetch_add(1, Ordering::Relaxed);
         if self.out.active.load(Ordering::Relaxed) {
             self.out.player.push_rtp(rtp);
         }

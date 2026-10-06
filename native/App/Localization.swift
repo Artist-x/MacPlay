@@ -20,6 +20,10 @@ enum MacPlayLocalization {
         if let translation = translations[text] { return target == 0 ? translation.0 : translation.1 }
         // Status details can include a translated app hint followed by the original system explanation.
         if text.contains("\n") { return text.components(separatedBy: "\n").map(translate).joined(separator: "\n") }
+        if text.hasPrefix("将在"),text.hasSuffix("秒后重试连接。") {
+            let seconds=text.dropFirst(2).dropLast(7)
+            return code == "zh-Hant" ? "將在\(seconds)秒後重試連線。" : "Retrying in \(seconds) seconds."
+        }
         for (expression, traditional, english) in patterns {
             let range = NSRange(text.startIndex..<text.endIndex, in: text)
             if expression.firstMatch(in: text, range: range) != nil {
@@ -32,6 +36,15 @@ enum MacPlayLocalization {
     }
 
     private static let translations: [String: (String, String)] = [
+        "连接启动超时": ("連線啟動逾時", "Connection startup timed out"),
+        "iPhone网络连接超时": ("iPhone網路連線逾時", "iPhone network connection timed out"),
+        "CarPlay视频连接超时": ("CarPlay視訊連線逾時", "CarPlay video connection timed out"),
+        "iPhone网络连接已断开": ("iPhone網路連線已中斷", "iPhone network connection lost"),
+        "网络已切换，请读取或填写当前网络密码。": ("網路已切換，請讀取或填寫目前網路密碼。", "Network changed. Read or enter the current network password."),
+        "请读取当前网络并填写对应密码。": ("請讀取目前網路並填寫對應密碼。", "Read the current network and enter its password."),
+        "当前Wi-Fi与连接配置不一致": ("目前Wi-Fi與連線設定不一致", "Current Wi-Fi does not match the connection settings"),
+        "等待自动重连": ("等待自動重新連線", "Waiting to reconnect"),
+        "无线连接被动断开时自动重连": ("無線連線被動中斷時自動重新連線", "Automatically reconnect after a wireless disconnection"),
         "开源许可": ("開源授權", "Open-source license"),
         "日志": ("日誌", "Logs"),
         "版本、更新与日志": ("版本、更新與日誌", "Version, updates and logs"),

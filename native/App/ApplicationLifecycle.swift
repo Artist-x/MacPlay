@@ -64,7 +64,7 @@ import Combine
         item("显示MacPlay",#selector(showMain))
         item("显示CarPlay",#selector(showCarPlay),enabled:model?.running == true)
         menu.addItem(.separator())
-        item(model?.running == true ? "停止接收" : "启动接收",#selector(toggleReceiver))
+        item(model?.receivingOrWaiting == true ? "停止接收" : "启动接收",#selector(toggleReceiver))
         menu.addItem(.separator())
         item("退出MacPlay",#selector(quit))
         return menu
@@ -76,13 +76,14 @@ import Combine
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
         model?.showMainWindow()
     }
-    @objc private func showCarPlay() {
+    @objc private func showCarPlay() {model?.showCarPlayWindow()}
+    func prepareCarPlayPresentation() {
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
-        model?.command("show")
+        mainWindow?.orderBack(nil)
     }
     @objc private func toggleReceiver() {
         guard let model else {return}
-        if model.running {model.stop()} else {model.start()}
+        if model.receivingOrWaiting {model.stop()} else {model.start()}
     }
     @objc private func quit() {NSApp.terminate(nil)}
 
