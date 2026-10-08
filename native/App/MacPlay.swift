@@ -207,8 +207,12 @@ struct PlaySettings: Codable {
         command("show")
     }
     func showMainWindow() {
-        for window in NSApp.windows where !(window is NSPanel) && window.canBecomeMain {window.makeKeyAndOrderFront(nil)}
-        NSRunningApplication.current.activate(options:.activateIgnoringOtherApps)
+        if MacPlayApplicationDelegate.shared?.restoreMainWindow() == true {return}
+        NSApp.activate()
+        for window in NSApp.windows where !(window is NSPanel) && (window.canBecomeMain || window.isMiniaturized) {
+            if window.isMiniaturized {window.deminiaturize(nil)}
+            window.makeKeyAndOrderFront(nil)
+        }
     }
     func persistPreferences() {
         guard let data=try? JSONEncoder().encode(settings) else {return}
@@ -797,7 +801,7 @@ struct SettingsView: View {
                         Section(L("视频分辨率")) {
                             Picker(L("分辨率"),selection:$model.settings.resolution) {
                                 Text(L("屏幕原生像素（避开刘海）")).tag("native")
-                                ForEach(["1280x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
+                                ForEach(["1280x720","1920x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
                                 Text(L("自定义")).tag("custom")
                             }.onChange(of:model.settings.resolution){_,_ in model.updateResolution()}
                             if model.settings.resolution == "custom" {
@@ -849,11 +853,24 @@ struct SettingsView: View {
     }
 }
 
+private struct MainWindowContent: View {
+    @Environment(\.openWindow) private var openWindow
+    @ObservedObject var model: PlayModel
+    let delegate: MacPlayApplicationDelegate
+
+    var body: some View {
+        SettingsView(model:model).onAppear {
+            let openScene=openWindow
+            delegate.install(model,openMainWindow:{openScene(id:"main")})
+        }
+    }
+}
+
 @main struct MacPlayApp: App {
     @NSApplicationDelegateAdaptor(MacPlayApplicationDelegate.self) private var delegate
     @StateObject private var model=PlayModel()
     var body:some Scene {
-        Window("MacPlay",id:"main") {SettingsView(model:model).onAppear{delegate.install(model)}}
+        Window("MacPlay",id:"main") {MainWindowContent(model:model,delegate:delegate)}
             .defaultSize(width:820,height:650)
             .commands {CommandGroup(replacing:.newItem){};CommandGroup(after:.appInfo){Button(L("启动接收")){model.start()};Button(L("停止接收")){model.stop()}}}
     }

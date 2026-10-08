@@ -40,6 +40,14 @@ static NSString *mpCloseText(NSString *simplified, NSString *traditional, NSStri
 @implementation MacPlayVideoWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+- (void)performClose:(id)sender {
+ // AppKit's default performClose requires a standard title-bar close button.
+ // Borderless windows still route closing through the disconnect confirmation.
+ (void)sender;
+ id<NSWindowDelegate> delegate=self.delegate;
+ if(![delegate respondsToSelector:@selector(windowShouldClose:)] || [delegate windowShouldClose:self])
+  [self close];
+}
 @end
 
 // GStreamer's Cocoa GL window requests Regular even when rendering into our
@@ -105,6 +113,8 @@ static void mpSetWindowAspect(double aspect) {
   NSSize fixed = NSMakeSize(mpWidth * screen.frame.size.width / mpPanelWidth,
                             mpHeight * screen.frame.size.height / mpPanelHeight);
   [macplayWindow setContentSize:fixed];
+  macplayWindow.contentView.needsLayout=YES;
+  [macplayWindow.contentView layoutSubtreeIfNeeded];
   NSRect visible = screen.visibleFrame, frame = macplayWindow.frame;
   [macplayWindow setFrameOrigin:NSMakePoint(NSMidX(visible)-frame.size.width/2,
                                            NSMidY(visible)-frame.size.height/2)];
@@ -123,6 +133,23 @@ static void mpLogWindow() {
 @interface MacPlayWindowDelegate : NSObject <NSWindowDelegate>
 @end
 @implementation MacPlayWindowDelegate
+- (void)applicationDidBecomeActive:(NSNotification *)notification {
+ (void)notification;
+ if(!macplayWindow.isVisible || mpClosingWindow)return;
+ // Activation is asynchronous; assign keyboard focus after it completes.
+ [macplayWindow makeKeyWindow];
+ [macplayWindow makeFirstResponder:macplayWindow.contentView];
+ macplayWindow.contentView.needsLayout=YES;
+ [macplayWindow.contentView layoutSubtreeIfNeeded];
+ [macplayWindow.contentView setNeedsDisplay:YES];
+}
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+ (void)notification;macplayWindow.contentView.needsLayout=YES;
+}
+- (void)windowDidResignKey:(NSNotification *)notification {
+ (void)notification;macplayWindow.contentView.needsLayout=YES;
+ [macplayWindow.contentView layoutSubtreeIfNeeded];
+}
 - (BOOL)windowShouldClose:(NSWindow *)window {
  if(mpClosingWindow)return YES;
  if(mpClosePromptOpen || mpCloseRequested)return NO;
@@ -202,6 +229,7 @@ extern "C" void macplay_close_window() {
  mpClosingWindow=true;
  if(macplayWindow){
   if(NSWindow *sheet=macplayWindow.attachedSheet){[NSApp endSheet:sheet returnCode:NSModalResponseCancel];[sheet orderOut:nil];}
+  [[NSNotificationCenter defaultCenter] removeObserver:mpWindowDelegate];
   [macplayWindow setDelegate:nil];[macplayWindow orderOut:nil];[macplayWindow close];macplayWindow=nil;mpWindowDelegate=nil;
  }
  mpWindowAction=0;mpCloseRequested=false;mpClosePromptOpen=false;
@@ -392,13 +420,241 @@ extern "C" void livi_set_backdrop(guintptr parent, double r, double g, double b)
 struct MPInput { double x,y; int down; };
 static std::deque<MPInput> mpInputs;
 static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});}
+// Draw the whole button so AppKit's detached title-bar cells can't cover glyphs.
+@interface MacPlayTrafficLightButton : NSButton {
+ NSWindowButton _kind;
+ BOOL _showsHoverSymbol;
+}
+@property BOOL showsHoverSymbol;
+- (instancetype)initWithFrame:(NSRect)frame kind:(NSWindowButton)kind;
+@end
+@implementation MacPlayTrafficLightButton
+- (instancetype)initWithFrame:(NSRect)frame kind:(NSWindowButton)kind {
+ if((self=[super initWithFrame:frame])) {
+  _kind=kind;self.bordered=NO;self.title=@"";
+  [self setButtonType:NSButtonTypeMomentaryPushIn];
+  self.wantsLayer=YES;
+ }
+ return self;
+}
+- (BOOL)showsHoverSymbol {return _showsHoverSymbol;}
+- (void)setShowsHoverSymbol:(BOOL)value {
+ if(_showsHoverSymbol==value)return;
+ _showsHoverSymbol=value;self.needsDisplay=YES;
+}
+- (void)setEnabled:(BOOL)value {[super setEnabled:value];self.needsDisplay=YES;}
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {(void)event;return YES;}
+- (void)drawRect:(NSRect)dirtyRect {
+ (void)dirtyRect;
+ NSColor *color=_kind==NSWindowCloseButton ?
+  [NSColor colorWithSRGBRed:1 green:95.0/255 blue:87.0/255 alpha:1] :
+  [NSColor colorWithSRGBRed:254.0/255 green:188.0/255 blue:46.0/255 alpha:1];
+ if(!self.enabled)color=[NSColor colorWithWhite:0.5 alpha:0.6];
+ else if(self.cell.isHighlighted)color=[color blendedColorWithFraction:0.18 ofColor:NSColor.blackColor];
+ NSBezierPath *circle=[NSBezierPath bezierPathWithOvalInRect:NSInsetRect(self.bounds,0.5,0.5)];
+ [color setFill];[circle fill];
+ [[NSColor colorWithWhite:0 alpha:0.15] setStroke];circle.lineWidth=0.5;[circle stroke];
+ if(!_showsHoverSymbol || !self.enabled)return;
+ [[NSColor colorWithWhite:0.12 alpha:0.9] setStroke];
+ NSBezierPath *symbol=[NSBezierPath bezierPath];
+ symbol.lineWidth=1.2;symbol.lineCapStyle=NSLineCapStyleRound;
+ CGFloat x=NSMidX(self.bounds),y=NSMidY(self.bounds),r=2.6;
+ if(_kind==NSWindowCloseButton) {
+  [symbol moveToPoint:NSMakePoint(x-r,y-r)];[symbol lineToPoint:NSMakePoint(x+r,y+r)];
+  [symbol moveToPoint:NSMakePoint(x-r,y+r)];[symbol lineToPoint:NSMakePoint(x+r,y-r)];
+ } else {
+  [symbol moveToPoint:NSMakePoint(x-3,y)];[symbol lineToPoint:NSMakePoint(x+3,y)];
+ }
+ [symbol stroke];
+}
+@end
+
+// A compact floating title bar leaves the video at its original pixel size.
+@interface MacPlayFloatingTitleBar : NSView {
+ NSView *_controls;
+}
+@property(readonly) NSView *controls;
+@end
+@implementation MacPlayFloatingTitleBar
+- (instancetype)initWithFrame:(NSRect)frame {
+ if((self=[super initWithFrame:frame])) {
+  // Use system appearance and untinted native glass.
+  _controls=[[NSView alloc] initWithFrame:self.bounds];
+  _controls.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  if(@available(macOS 26.0,*)) {
+   NSGlassEffectView *glass=[[NSGlassEffectView alloc] initWithFrame:self.bounds];
+   glass.style=NSGlassEffectViewStyleClear;
+
+   glass.cornerRadius=18;
+   glass.contentView=_controls;
+   glass.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+   [self addSubview:glass];
+  } else {
+   NSVisualEffectView *background=[[NSVisualEffectView alloc] initWithFrame:self.bounds];
+   background.material=NSVisualEffectMaterialHUDWindow;
+   background.blendingMode=NSVisualEffectBlendingModeWithinWindow;
+   background.state=NSVisualEffectStateActive;
+   background.wantsLayer=YES;background.layer.cornerRadius=18;
+   background.layer.masksToBounds=YES;
+   background.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+   [self addSubview:background];[self addSubview:_controls];
+  }
+ }
+ return self;
+}
+- (NSView *)controls {return _controls;}
+- (NSView *)hitTest:(NSPoint)point {
+ NSView *hit=[super hitTest:point];
+ if(!hit)return nil;
+ for(NSView *view=hit;view && view!=self;view=view.superview)
+  if([view isKindOfClass:NSButton.class])return view;
+ return self;
+}
+- (BOOL)acceptsFirstMouse:(NSEvent *)event {return YES;}
+- (BOOL)mouseDownCanMoveWindow { return YES; }
+- (void)mouseDown:(NSEvent *)event {
+ if (!(self.window.styleMask & NSWindowStyleMaskFullScreen))
+  [self.window performWindowDragWithEvent:event];
+}
+// Never bubble the release, drag or scroll back to the CarPlay input surface.
+- (void)mouseUp:(NSEvent *)event {(void)event;}
+- (void)mouseDragged:(NSEvent *)event {(void)event;}
+- (void)scrollWheel:(NSEvent *)event {(void)event;}
+@end
+
 @interface MacPlayInputView : NSView {
  MPScrollGesture _scroll;
  NSTimer *_scrollTimer;
  BOOL _pointerDown;
+ BOOL _hasPointerActivity;
+ CFTimeInterval _edgeHoverStart, _exitHoverStart;
+ MacPlayFloatingTitleBar *_titleBar;
+ NSTrackingArea *_titleTracking;
+ MacPlayTrafficLightButton *_closeButton;
+ MacPlayTrafficLightButton *_minimizeButton;
+ CAShapeLayer *_cornerMask;
 }
+- (void)updateFloatingTitleBar;
+- (void)updateFloatingTitleBarForPoint:(NSPoint)point;
 @end
 @implementation MacPlayInputView
+- (instancetype)initWithFrame:(NSRect)frame {
+ if ((self=[super initWithFrame:frame])) {
+  self.wantsLayer=YES;
+  _titleBar=[[MacPlayFloatingTitleBar alloc] initWithFrame:NSMakeRect(0,0,300,36)];
+  _titleBar.hidden=YES;
+  MacPlayTrafficLightButton *close=[[MacPlayTrafficLightButton alloc] initWithFrame:NSMakeRect(12,11,14,14) kind:NSWindowCloseButton];
+  _closeButton=close;
+  close.target=self;close.action=@selector(closeFloatingWindow:);
+  close.frame=NSMakeRect(12,11,14,14);
+  close.toolTip=mpCloseText(@"关闭",@"關閉",@"Close");
+  [_titleBar.controls addSubview:close];
+  _minimizeButton=[[MacPlayTrafficLightButton alloc] initWithFrame:NSMakeRect(34,11,14,14) kind:NSWindowMiniaturizeButton];
+  _minimizeButton.target=self;_minimizeButton.action=@selector(minimizeFloatingWindow:);
+  _minimizeButton.frame=NSMakeRect(34,11,14,14);
+  _minimizeButton.toolTip=mpCloseText(@"最小化",@"最小化",@"Minimize");
+  [_titleBar.controls addSubview:_minimizeButton];
+  NSTextField *title=[NSTextField labelWithString:@"MacPlay · CarPlay"];
+  title.font=[NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+  title.textColor=NSColor.labelColor;
+  title.alignment=NSTextAlignmentCenter;
+  title.frame=NSMakeRect(58,9,184,18);
+  title.autoresizingMask=NSViewWidthSizable;
+  [_titleBar.controls addSubview:title];
+  [self addSubview:_titleBar positioned:NSWindowAbove relativeTo:nil];
+ }
+ return self;
+}
+- (void)didAddSubview:(NSView *)subview {
+ [super didAddSubview:subview];self.needsLayout=YES;
+}
+- (BOOL)pointIsInFloatingTitleBar:(NSPoint)point {
+ return !_titleBar.hidden && NSPointInRect(point,_titleBar.frame);
+}
+- (NSView *)hitTest:(NSPoint)point {
+ NSPoint local=[self convertPoint:point fromView:self.superview];
+ if(!NSPointInRect(local,self.bounds))return nil;
+ if([self pointIsInFloatingTitleBar:local]) {
+  NSView *hit=[_titleBar hitTest:local];
+  return hit ?: _titleBar;
+ }
+ // Video renderer subviews must not steal input or title-bar releases.
+ return self;
+}
+- (void)closeFloatingWindow:(id)sender { [self.window performClose:sender]; }
+- (void)minimizeFloatingWindow:(id)sender { [self.window miniaturize:sender]; }
+- (void)layout {
+ [super layout];
+ CGFloat width=fmin(300, fmax(0,self.bounds.size.width-20));
+ _titleBar.frame=NSMakeRect((self.bounds.size.width-width)/2,
+                          self.bounds.size.height-46,width,36);
+ // Empirical radius for a 960x360-point CarPlay window at Retina 2x.
+ // This is not an Apple standard; other sizes and scales need visual validation.
+ CGFloat radius=(self.window.styleMask & NSWindowStyleMaskFullScreen) ? 0 : 28;
+ self.layer.cornerRadius=0; // One explicit path owns the four corners.
+ self.layer.masksToBounds=YES;
+ // Mask the complete composited video surface with one shared four-corner path.
+ if(!_cornerMask)_cornerMask=[CAShapeLayer layer];
+ CAShapeLayer *mask=_cornerMask;
+ mask.frame=self.bounds;
+ mask.contentsScale=self.window.backingScaleFactor ?: 1;
+ CGPathRef path=CGPathCreateWithRoundedRect(self.bounds,radius,radius,nullptr);
+ mask.path=path;
+ self.layer.mask=mask;
+ CGPathRelease(path);
+ [self.window invalidateShadow];
+ [self updateFloatingTitleBar];
+}
+- (void)viewDidChangeBackingProperties {
+ [super viewDidChangeBackingProperties];
+ self.needsLayout=YES;
+ [self layoutSubtreeIfNeeded];
+}
+- (void)updateTrackingAreas {
+ [super updateTrackingAreas];
+ if(_titleTracking)[self removeTrackingArea:_titleTracking];
+ _titleTracking=[[NSTrackingArea alloc] initWithRect:NSZeroRect
+    options:NSTrackingMouseMoved|NSTrackingMouseEnteredAndExited|NSTrackingActiveAlways|NSTrackingInVisibleRect
+    owner:self userInfo:nil];
+ [self addTrackingArea:_titleTracking];
+}
+- (void)updateFloatingTitleBar {
+ // Do not expose inactive glass or gray window controls during presentation.
+ // The initial pointer position alone should not reveal the toolbar.
+ if(!_hasPointerActivity || !self.window.isKeyWindow || !NSApp.isActive) {
+  _titleBar.hidden=YES;_edgeHoverStart=0;_exitHoverStart=0;_closeButton.showsHoverSymbol=NO;_minimizeButton.showsHoverSymbol=NO;return;
+ }
+ NSPoint point=[self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil];
+ [self updateFloatingTitleBarForPoint:point];
+}
+- (void)updateFloatingTitleBarForPoint:(NSPoint)point {
+ CFTimeInterval now=CACurrentMediaTime();
+ BOOL inside=NSPointInRect(point,self.bounds);
+ BOOL edge=inside && point.y>=NSMaxY(self.bounds)-12;
+ // Preserve a bridge from the edge down to the floating controls.
+ BOOL bridge=inside && point.x>=NSMinX(_titleBar.frame) && point.x<=NSMaxX(_titleBar.frame) && point.y>=NSMinY(_titleBar.frame);
+ BOOL show=!_titleBar.hidden;
+ if(_pointerDown){show=NO;_edgeHoverStart=0;_exitHoverStart=0;}
+ else if(!show){
+  _exitHoverStart=0;
+  if(edge){if(!_edgeHoverStart)_edgeHoverStart=now;if(now-_edgeHoverStart>=0.2){show=YES;_edgeHoverStart=0;}}
+  else _edgeHoverStart=0;
+ }else{
+  _edgeHoverStart=0;
+  if(edge||bridge)_exitHoverStart=0;
+  else{if(!_exitHoverStart)_exitHoverStart=now;if(now-_exitHoverStart>=0.2){show=NO;_exitHoverStart=0;}}
+ }
+ if(self.window.attachedSheet)show=YES;
+ _titleBar.hidden=!show;
+ _minimizeButton.enabled=!(self.window.styleMask & NSWindowStyleMaskFullScreen);
+ NSPoint controlsPoint=[_titleBar.controls convertPoint:point fromView:self];
+ BOOL buttonHover=show && NSPointInRect(controlsPoint,NSMakeRect(6,5,50,26));
+ _closeButton.showsHoverSymbol=buttonHover;
+ _minimizeButton.showsHoverSymbol=buttonHover;
+}
+- (void)mouseMoved:(NSEvent *)event { (void)event;_hasPointerActivity=YES;[self updateFloatingTitleBar]; }
+- (void)mouseEntered:(NSEvent *)event { (void)event;[self updateFloatingTitleBar]; }
+- (void)mouseExited:(NSEvent *)event { (void)event;[self updateFloatingTitleBar]; }
 - (BOOL)acceptsFirstResponder { return YES; }
 - (void)finishScroll {
  [_scrollTimer invalidate];_scrollTimer=nil;
@@ -411,6 +667,8 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
 - (void)record:(NSEvent *)event down:(int)down {
  [self finishScroll];
  NSPoint p=[self convertPoint:event.locationInWindow fromView:nil];
+ if(down==0 && !_pointerDown)return;
+ if(!_pointerDown && [self pointIsInFloatingTitleBar:p])return;
  NSRect video=mpVideoRect(self,mpAspect);
  if(video.size.width<=0||video.size.height<=0)return;
  double x=(p.x-video.origin.x)/video.size.width,y=1-(p.y-video.origin.y)/video.size.height;
@@ -418,10 +676,12 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
  x=MPScrollGesture::clamp(x);y=MPScrollGesture::clamp(y);
  _scroll.x=x;_scroll.y=y;_pointerDown=down==1;mpQueue(x,y,down);
 }
-- (void)mouseDown:(NSEvent *)event { [self record:event down:1]; }
+- (void)mouseDown:(NSEvent *)event { _edgeHoverStart=0;_exitHoverStart=0;[self record:event down:1];[self updateFloatingTitleBar]; }
 - (void)mouseDragged:(NSEvent *)event { [self record:event down:1]; }
 - (void)mouseUp:(NSEvent *)event { [self record:event down:0]; }
 - (void)scrollWheel:(NSEvent *)event {
+ NSPoint pointer=[self convertPoint:event.locationInWindow fromView:nil];
+ if([self pointIsInFloatingTitleBar:pointer]) {[self finishScroll];return;}
  if(_pointerDown)return;
  // CarPlay supplies its own fling after release; do not replay macOS momentum.
  if(event.momentumPhase!=NSEventPhaseNone){[self finishScroll];return;}
@@ -444,6 +704,11 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
  _scrollTimer=[NSTimer scheduledTimerWithTimeInterval:0.15 target:self selector:@selector(finishScroll) userInfo:nil repeats:NO];
 }
 - (void)keyDown:(NSEvent *)event {
+ if(event.modifierFlags & NSEventModifierFlagCommand) {
+  NSString *key=event.charactersIgnoringModifiers.lowercaseString;
+  if([key isEqualToString:@"w"]) {[self.window performClose:nil];return;}
+  if([key isEqualToString:@"m"] && !(self.window.styleMask & NSWindowStyleMaskFullScreen)) {[self.window miniaturize:nil];return;}
+ }
  if(event.keyCode==53) {
   [self releaseInput:nil];
   if(macplayWindow.styleMask & NSWindowStyleMaskFullScreen) {
@@ -457,23 +722,34 @@ extern "C" uintptr_t macplay_window(double aspect) {
  mpSetWindowAspect(aspect);
  if(!macplayWindow) {
   mpClosingWindow=false;
-  NSWindowStyleMask style=mpDefaultFullscreen ? NSWindowStyleMaskBorderless :
-    NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;
+  NSWindowStyleMask style=NSWindowStyleMaskBorderless|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;
   macplayWindow=[[MacPlayVideoWindow alloc] initWithContentRect:NSMakeRect(0,0,1100,1100/mpAspect) styleMask:style backing:NSBackingStoreBuffered defer:NO];
   [macplayWindow setReleasedWhenClosed:NO]; [macplayWindow setTitle:@"MacPlay · CarPlay"];
+  macplayWindow.opaque=NO;macplayWindow.backgroundColor=NSColor.clearColor;
+  macplayWindow.hasShadow=YES;macplayWindow.acceptsMouseMovedEvents=YES;
   [macplayWindow setMovable:!mpDefaultFullscreen]; [macplayWindow setMovableByWindowBackground:NO];
   [macplayWindow setCollectionBehavior:mpDefaultFullscreen ? NSWindowCollectionBehaviorFullScreenPrimary : NSWindowCollectionBehaviorFullScreenNone];
   mpWindowDelegate=[MacPlayWindowDelegate new]; [macplayWindow setDelegate:mpWindowDelegate];
+  [[NSNotificationCenter defaultCenter] addObserver:mpWindowDelegate selector:@selector(applicationDidBecomeActive:) name:NSApplicationDidBecomeActiveNotification object:NSApp];
   MacPlayInputView *view=[[MacPlayInputView alloc] initWithFrame:macplayWindow.contentView.bounds];
   [view setWantsLayer:YES];view.layer.backgroundColor=CGColorGetConstantColor(kCGColorBlack);
+  view.layer.cornerRadius=0;view.layer.masksToBounds=YES;
   [macplayWindow setContentView:view];
   if(NSScreen *screen=mpSelectedScreen()) [macplayWindow setFrameOrigin:screen.frame.origin];
   mpSetWindowAspect(mpAspect);
   [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
  if(macplayWindow.isMiniaturized) [macplayWindow deminiaturize:nil];
- [NSApp activateIgnoringOtherApps:YES];
+ [NSApp activate];
  [macplayWindow makeKeyAndOrderFront:nil];
+ [macplayWindow makeFirstResponder:macplayWindow.contentView];
+ NSWindow *presentedWindow=macplayWindow;
+ dispatch_async(dispatch_get_main_queue(), ^{
+  if(macplayWindow==presentedWindow && presentedWindow.isVisible && NSApp.isActive) {
+   [presentedWindow makeKeyWindow];
+   [presentedWindow makeFirstResponder:presentedWindow.contentView];
+  }
+ });
  // Accessory receivers have no Dock activation of their own. Order this normal-level
  // window across processes once per show request; never make it permanently floating.
  [macplayWindow orderFrontRegardless];
@@ -491,6 +767,9 @@ extern "C" void macplay_pump() {
   NSEvent *event;
   while((event=[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:[NSDate distantPast] inMode:NSDefaultRunLoopMode dequeue:YES])) [NSApp sendEvent:event];
   CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.001,true);
+  // Poll the actual pointer position: glass/button tracking areas may consume
+  // hover events before the input surface gets a mouseMoved notification.
+  if(macplayWindow)[(MacPlayInputView *)macplayWindow.contentView updateFloatingTitleBar];
   [NSApp updateWindows];
  }
 }

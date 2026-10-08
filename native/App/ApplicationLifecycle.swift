@@ -5,6 +5,7 @@ import Combine
     static weak var shared: MacPlayApplicationDelegate?
     private weak var model: PlayModel?
     private weak var mainWindow: NSWindow?
+    private var openMainWindow: (() -> Void)?
     private var statusItem: NSStatusItem?
     private var modelObservation: AnyCancellable?
     private var windowObservation: NSObjectProtocol?
@@ -22,7 +23,8 @@ import Combine
         }
     }
 
-    func install(_ model: PlayModel) {
+    func install(_ model: PlayModel, openMainWindow: @escaping () -> Void) {
+        self.openMainWindow=openMainWindow
         Self.shared=self
         if self.model == nil {
             self.model=model
@@ -76,10 +78,27 @@ import Combine
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
         model?.showMainWindow()
     }
+    func restoreMainWindow() -> Bool {
+        guard let openMainWindow else {return false}
+        explicitWindowRequestUntil=Date().addingTimeInterval(1)
+        // SwiftUI can dispose of a closed Window scene. Asking the scene to open
+        // also recreates it; enumerating NSApp.windows cannot restore that case.
+        openMainWindow()
+        NSApp.activate()
+        if let window=mainWindow,NSApp.windows.contains(where:{$0 === window}) {
+            if window.isMiniaturized {window.deminiaturize(nil)}
+            window.makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
     @objc private func showCarPlay() {model?.showCarPlayWindow()}
     func prepareCarPlayPresentation() {
         explicitWindowRequestUntil=Date().addingTimeInterval(1)
-        mainWindow?.orderBack(nil)
+        // Ordering a minimized window can restore it. Keep the main window's
+        // minimized/hidden state when the user only requests the CarPlay window.
+        if let window=mainWindow,window.isVisible,!window.isMiniaturized {
+            window.orderBack(nil)
+        }
     }
     @objc private func toggleReceiver() {
         guard let model else {return}
