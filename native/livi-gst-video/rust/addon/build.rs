@@ -61,6 +61,7 @@ fn main() {
         .compile("gst_video_cpp");
     println!("cargo:rustc-link-lib=framework=Cocoa");
     println!("cargo:rustc-link-lib=framework=QuartzCore");
+    println!("cargo:rustc-link-lib=framework=AVFoundation");
 
     emit_gst_link_flags();
 }

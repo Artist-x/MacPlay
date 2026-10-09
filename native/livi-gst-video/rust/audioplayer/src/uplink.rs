@@ -9,7 +9,7 @@ use gstreamer_app as gst_app;
 use gst::prelude::*;
 use livi_audio_uplink::{seal_packet, to_wire_pcm, Counters, UplinkCodec, RTP_HEADER_LEN};
 use std::net::UdpSocket;
-use std::sync::Mutex;
+use std::sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}};
 
 /// What the phone negotiated for its microphone stream.
 pub struct UplinkConfig {
@@ -73,6 +73,7 @@ pub fn pipeline_desc(cfg: &UplinkConfig) -> String {
 }
 
 pub struct Uplink {
+    live: Arc<AtomicBool>,
     pipeline: gst::Pipeline,
 }
 
@@ -101,9 +102,12 @@ impl Uplink {
         let frame_bytes = (samples * u32::from(cfg.channels) * 2) as usize;
         let state = Mutex::new((Counters::default(), Vec::<u8>::new()));
 
+        let live=Arc::new(AtomicBool::new(true));
+        let callback_live=live.clone();
         sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
+                    if !callback_live.load(Ordering::Acquire){return Err(gst::FlowError::Flushing)}
                     let Ok(sample) = sink.pull_sample() else {
                         return Err(gst::FlowError::Eos);
                     };
@@ -116,6 +120,7 @@ impl Uplink {
                     let Ok(mut guard) = state.lock() else {
                         return Ok(gst::FlowSuccess::Ok);
                     };
+                    if !callback_live.load(Ordering::Acquire){return Err(gst::FlowError::Flushing)}
                     let (counters, pending) = &mut *guard;
 
                     match cfg.codec {
@@ -148,16 +153,35 @@ impl Uplink {
                 .build(),
         );
 
-        Some(Self { pipeline })
+        if let Some(bus)=pipeline.bus() {
+            let weak=pipeline.downgrade();
+            let failed=live.clone();
+            bus.set_sync_handler(move |_,message| {
+                if let gst::MessageView::Error(error)=message.view() {
+                    failed.store(false,Ordering::Release);
+                    eprintln!("[cp_mic] capture/encoder failed: {}",error.error());
+                    if let Some(p)=weak.upgrade(){p.call_async(|p|{let _=p.set_state(gst::State::Null);});}
+                }
+                gst::BusSyncReply::Drop
+            });
+        }
+        Some(Self { pipeline,live })
     }
 
-    pub fn start(&self) {
-        let _ = self.pipeline.set_state(gst::State::Playing);
+    pub fn start(&self) -> bool {
+        if self.pipeline.set_state(gst::State::Playing).is_err() {
+            self.live.store(false,Ordering::Release);
+            let _=self.pipeline.set_state(gst::State::Null);
+            eprintln!("[cp_mic] capture could not start");
+            return false;
+        }
+        true
     }
 }
 
 impl Drop for Uplink {
     fn drop(&mut self) {
+        self.live.store(false,Ordering::Release);
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }

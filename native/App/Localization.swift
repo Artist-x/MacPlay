@@ -36,6 +36,11 @@ enum MacPlayLocalization {
     }
 
     private static let translations: [String: (String, String)] = [
+        "严格按屏幕物理像素显示":("嚴格按螢幕實體像素顯示","Display at exact physical pixel size"),
+        "原生像素模式全屏显示。关闭严格像素显示后，窗口适配屏幕并可等比例调整大小，不改变请求分辨率。":("原生像素模式全螢幕顯示。關閉嚴格像素顯示後，視窗適配螢幕並可等比例調整大小，不改變請求解析度。","Native resolution uses full screen. Turn off exact pixel sizing to fit the window to the screen and resize it proportionally without changing the requested resolution."),
+        "CarPlay已连接":("CarPlay已連線","CarPlay connected"),
+        "首帧已解码，CarPlay画面窗口已打开":("首幀已解碼，CarPlay畫面視窗已開啟","First frame decoded; CarPlay window opened"),
+
         "连接启动超时": ("連線啟動逾時", "Connection startup timed out"),
         "iPhone网络连接超时": ("iPhone網路連線逾時", "iPhone network connection timed out"),
         "CarPlay视频连接超时": ("CarPlay視訊連線逾時", "CarPlay video connection timed out"),

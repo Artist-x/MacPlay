@@ -4,7 +4,7 @@
 
 extern "C" {
   uintptr_t macplay_window(double aspect);
-  void macplay_configure_window(double width, double height, double panel_width, double panel_height, bool fullscreen);
+  void macplay_configure_window(double width, double height, double panel_width, double panel_height, bool fullscreen, bool strict);
   void macplay_pump();
   void macplay_select_display(uint32_t id);
   void macplay_close_window();
@@ -26,17 +26,18 @@ static napi_value SelectDisplayOptions(napi_env env, napi_callback_info info) {
 }
 
 static napi_value ConfigureWindowOptions(napi_env env, napi_callback_info info) {
-  size_t argc = 5;
-  napi_value argv[5];
+  size_t argc = 6;
+  napi_value argv[6];
   napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
   double width = 1920, height = 1080, panel_w = 1920, panel_h = 1080;
-  bool fullscreen = false;
+  bool fullscreen = false, strict = false;
   if (argc >= 1) napi_get_value_double(env, argv[0], &width);
   if (argc >= 2) napi_get_value_double(env, argv[1], &height);
   if (argc >= 3) napi_get_value_double(env, argv[2], &panel_w);
   if (argc >= 4) napi_get_value_double(env, argv[3], &panel_h);
   if (argc >= 5) napi_get_value_bool(env, argv[4], &fullscreen);
-  macplay_configure_window(width, height, panel_w, panel_h, fullscreen);
+  if (argc >= 6) napi_get_value_bool(env, argv[5], &strict);
+  macplay_configure_window(width, height, panel_w, panel_h, fullscreen, strict);
   napi_value undefined;
   napi_get_undefined(env, &undefined);
   return undefined;

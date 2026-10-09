@@ -15,7 +15,7 @@ use gstreamer_controller::prelude::*;
 
 use livi_audio_stream::{reframe_aac, rtp_caps, Codec, RTP_HEADER_LEN};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Once};
 
 /// What a stream needs to build its pipeline.
@@ -92,6 +92,8 @@ struct VizAcc {
 }
 
 pub struct Player {
+    decoded: Arc<AtomicU64>,
+    errors: Arc<AtomicU64>,
     pipeline: gst::Pipeline,
     appsrc: gst_app::AppSrc,
     volume: gst::Element,
@@ -139,13 +141,17 @@ impl Player {
         volume.add_control_binding(&binding).ok()?;
         volume.set_control_binding_disabled("volume", true);
 
+        let decoded=Arc::new(AtomicU64::new(0));
+        let errors=Arc::new(AtomicU64::new(0));
         let visualizer_enabled = Arc::new(AtomicBool::new(false));
         let visualizer: Arc<Mutex<VizAcc>> = Default::default();
         // Pre-fader tap: mix each buffer to mono, hold ~200ms.
         if let Some(sink_pad) = volume.static_pad("sink") {
+            let decoded=decoded.clone();
             let enabled = visualizer_enabled.clone();
             let acc = visualizer.clone();
             sink_pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+                if info.buffer().is_some(){decoded.fetch_add(1,Ordering::Relaxed);}
                 if enabled.load(Ordering::Relaxed)
                     && let Some(buffer) = info.buffer()
                     && let Some(caps) = pad.current_caps()
@@ -188,9 +194,11 @@ impl Player {
         }
 
         if let Some(bus) = pipeline.bus() {
+            let errors=errors.clone();
             let label = cfg.label.clone();
             bus.set_sync_handler(move |_, msg| {
                 if let gst::MessageView::Error(e) = msg.view() {
+                    errors.fetch_add(1,Ordering::Relaxed);
                     eprintln!("[cp_audio:{label}] {} | {}", e.error(), e.debug().unwrap_or_default());
                 }
                 gst::BusSyncReply::Pass
@@ -198,6 +206,7 @@ impl Player {
         }
 
         Some(Self {
+            decoded,errors,
             pipeline,
             appsrc,
             volume,
@@ -208,6 +217,8 @@ impl Player {
             payload_type: cfg.payload_type,
         })
     }
+
+    pub fn statistics(&self) -> (u64,u64) {(self.decoded.load(Ordering::Relaxed),self.errors.load(Ordering::Relaxed))}
 
     /// Toggles the tap; off clears what was held.
     pub fn set_visualizer_enabled(&self, on: bool) {

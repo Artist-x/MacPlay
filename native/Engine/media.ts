@@ -1,3 +1,4 @@
+import { waitForMicrophone } from './microphonePermission'
 import fs from 'node:fs'
 import path from 'node:path'
 const root = process.env.MACPLAY_RESOURCES || path.resolve(__dirname, '../..')
@@ -21,19 +22,24 @@ export const gstHost: any = { onAudioStarted: () => {} }
 let started: ((id:number,sample:number)=>void)|undefined
 let windowHandle: Buffer | undefined
 let player: any, aspect=16/9
+let videoGeneration=0, firstFramePending=false, presented=false
+const receivers=new Map<number,object>()
 export let onVideo: (()=>void)|undefined
 export function setVideoCallback(callback:()=>void, ratio:number) { onVideo=callback; aspect=ratio }
 export function openScreenReceiver(id:number,key:Buffer):number {
+ const token={};receivers.set(id,token)
  return addon.openVideoReceiver(id,key,(codec:number,atom:Buffer)=>{
+  if(receivers.get(id)!==token)return
+  videoGeneration++;firstFramePending=true
   if(player) addon.stop(player)
-  const handle=windowHandle ?? (windowHandle=addon.macplayWindowHandle(aspect))
+  const handle=windowHandle ?? (windowHandle=addon.macplayPrepareVideoWindow(aspect))
   player=addon.createPlayer(codec===1?'h265':'h264',handle,atom,id)
   if(!player) throw new Error('无法创建CarPlay视频解码器')
   addon.start(player); addon.setContentRegion(player,0,0,aspect*1000,1000,aspect*1000,1000)
-  onVideo?.()
+
  })
 }
-export function closeScreenReceiver(id:number) { addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} addon.macplayCloseVideoWindow(); windowHandle=undefined }
+export function closeScreenReceiver(id:number) { receivers.delete(id);videoGeneration++;firstFramePending=false;presented=false; addon.closeVideoReceiver(id); if(player){addon.stop(player);player=null} addon.macplayCloseVideoWindow(); windowHandle=undefined }
 export function onAudioReceiverStarted(cb:(id:number,sample:number)=>void) {started=cb}
 export function openAudioReceiver(key:Buffer,o:any):any {
  return addon.openAudioReceiver(key,o.codec,o.payloadType,o.clockRate,o.channels,o.latencyMs,o.realtime,o.device,(id:number,sample:number)=>started?.(id,sample))
@@ -41,5 +47,29 @@ export function openAudioReceiver(key:Buffer,o:any):any {
 export function closeAudioReceiver(id:number) {addon.closeAudioReceiver(id)}
 export function setAudioReceiverActive(id:number,active:boolean) {addon.setAudioReceiverActive(id,active)}
 export function setAudioReceiverVolume(id:number,level:number,ms:number) {addon.setAudioReceiverVolume(id,level,ms)}
-export function openMicUplink(key:Buffer,o:any):number|null {return addon.openMicUplink(key,o.codec,o.payloadType,o.sampleRate,o.channels,o.bitrate,o.frameMs,o.port,o.phone,o.device)}
+export async function openMicUplink(key:Buffer,o:any,current:()=>boolean):Promise<number|null> {
+ if(!await waitForMicrophone(current,()=>addon.microphonePermission())) {
+  if(current())console.warn('[cp_mic] microphone permission denied')
+  return null
+ }
+ if(!current())return null
+ return addon.openMicUplink(key,o.codec,o.payloadType,o.sampleRate,o.channels,o.bitrate,o.frameMs,o.port,o.phone,o.device)
+}
 export function closeMicUplink(id:number){addon.closeMicUplink(id)}
+
+// Called from the main-thread event pump. Decoder buffers are observed on the
+// decoder output pad, never inferred from codec configuration or TCP packets.
+export function pollVideoReady() {
+ if(!player||!firstFramePending)return
+ const generation=videoGeneration, current=player
+ const [width,height]:number[]=addon.decodedVideoSize(current)
+ if(width<=0||height<=0||generation!==videoGeneration||current!==player)return
+ firstFramePending=false;aspect=width/height
+ addon.setContentRegion(player,0,0,width,height,width,height)
+ if(!presented){addon.macplayWindowHandle(aspect);presented=true}
+ else addon.macplayPrepareVideoWindow(aspect)
+ console.log(JSON.stringify({stage:'first-decoded-frame',width,height}))
+ onVideo?.()
+}
+
+export function showVideoWindow(){if(presented&&player)addon.macplayWindowHandle(aspect)}

@@ -23,7 +23,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay.receiver</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlayReceiver</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.2.1</string><key>CFBundleVersion</key><string>35</string>
+<key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/><key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
@@ -32,6 +32,7 @@ cat > "$RECEIVER/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 cp -R build/engine/. "$RES/engine/"
+node scripts/package-engine-dependencies.mjs "$RES/engine/node_modules"
 for mod in livi-crypto livi-gst-video; do
  mkdir -p "$RES/engine/node_modules/$mod/build/Release"
  cp "native/$mod/index.js" "native/$mod/package.json" "$RES/engine/node_modules/$mod/"
@@ -84,7 +85,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>com.roylyl.macplay</string>
 <key>CFBundleName</key><string>MacPlay</string><key>CFBundleDisplayName</key><string>MacPlay</string>
 <key>CFBundleExecutable</key><string>MacPlay</string><key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.2.1</string><key>CFBundleVersion</key><string>35</string>
+<key>CFBundleShortVersionString</key><string>1.2.2</string><key>CFBundleVersion</key><string>36</string>
 <key>CFBundleIconFile</key><string>MacPlay</string><key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string></array>
@@ -108,5 +109,5 @@ if [[ "${1:-}" != "--app-only" ]]; then
  rm -rf build/dmg/MacPlay.app
  ditto "$APP" build/dmg/MacPlay.app
 
- hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.1-${TARGET_ARCH}.dmg"
+ hdiutil create -ov -volname MacPlay -srcfolder build/dmg -format UDZO "dist/MacPlay-1.2.2-${TARGET_ARCH}.dmg"
 fi

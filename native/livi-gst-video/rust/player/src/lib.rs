@@ -202,6 +202,7 @@ unsafe extern "C" {
 /// One decoded stream: its pipeline, the source it is fed through, and the
 /// window view it draws into.
 pub struct Player {
+    decoded_size: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pipeline: gst::Pipeline,
     appsrc: Option<gst_app::AppSrc>,
     glshader: Option<gst::Element>,
@@ -245,7 +246,22 @@ impl Player {
             src.set_caps(Some(&length_prefixed_caps(codec, codec_data)));
         }
 
+        let decoded_size = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        if let Some(pad) = pipeline.by_name("dec").and_then(|dec| dec.static_pad("src")) {
+            let size = decoded_size.clone();
+            pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+                if info.buffer().is_some() {
+                    if let Some(caps) = pad.current_caps() {
+                        if let Ok(video) = gstreamer_video::VideoInfo::from_caps(&caps) {
+                            size.store(((video.width() as u64) << 32) | video.height() as u64, std::sync::atomic::Ordering::Release);
+                        }
+                    }
+                }
+                gst::PadProbeReturn::Ok
+            });
+        }
         let mut player = Self {
+            decoded_size,
             glshader: pipeline.by_name("cal"),
             #[cfg(target_os = "macos")]
             sink: pipeline.by_name("sink"),
@@ -335,6 +351,11 @@ impl Player {
         if let Some(o) = self.sink.as_ref().and_then(|s| s.dynamic_cast_ref::<gstreamer_video::VideoOverlay>()) {
             unsafe { o.set_window_handle(overlay) };
         }
+    }
+
+    pub fn decoded_size(&self) -> (u32, u32) {
+        let value = self.decoded_size.load(std::sync::atomic::Ordering::Acquire);
+        ((value >> 32) as u32, value as u32)
     }
 
     pub fn start(&self) {

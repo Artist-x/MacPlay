@@ -1,6 +1,8 @@
 #include <gst/gst.h>
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#import <AVFoundation/AVFoundation.h>
+#include <atomic>
 #include <math.h>
 #include <deque>
 #include <string>
@@ -16,6 +18,7 @@ static double mpAspect = 16.0 / 9.0;
 static double mpWidth = 1920, mpHeight = 1080;
 static double mpPanelWidth = 1920, mpPanelHeight = 1080;
 static bool mpDefaultFullscreen = false;
+static bool mpStrictPixels = false;
 static bool mpEnteringFullscreen = false;
 static bool mpHideAfterFullscreen = false;
 static bool mpClosingWindow = false;
@@ -112,6 +115,10 @@ static void mpSetWindowAspect(double aspect) {
   // not the panel. Map physical video pixels through the physical panel size.
   NSSize fixed = NSMakeSize(mpWidth * screen.frame.size.width / mpPanelWidth,
                             mpHeight * screen.frame.size.height / mpPanelHeight);
+  if(!mpStrictPixels) {
+    double width=fmin(960.0,fmin(screen.visibleFrame.size.width*0.8,screen.visibleFrame.size.height*0.8*mpAspect));
+    fixed=NSMakeSize(width,width/mpAspect);
+  }
   [macplayWindow setContentSize:fixed];
   macplayWindow.contentView.needsLayout=YES;
   [macplayWindow.contentView layoutSubtreeIfNeeded];
@@ -236,12 +243,12 @@ extern "C" void macplay_close_window() {
  mpEnteringFullscreen=false;mpHideAfterFullscreen=false;
 }
 extern "C" void macplay_configure_window(double width, double height,
-    double panelWidth, double panelHeight, bool fullscreen) {
+    double panelWidth, double panelHeight, bool fullscreen, bool strict) {
   if (!isfinite(width) || !isfinite(height) || !isfinite(panelWidth) ||
       !isfinite(panelHeight) || width <= 0 || height <= 0 ||
       panelWidth <= 0 || panelHeight <= 0) return;
   mpWidth=width; mpHeight=height; mpPanelWidth=panelWidth; mpPanelHeight=panelHeight;
-  mpDefaultFullscreen=fullscreen;
+  mpDefaultFullscreen=fullscreen;mpStrictPixels=strict;
   mpSetWindowAspect(width/height);
 }
 
@@ -293,8 +300,7 @@ extern "C" void macplay_configure_window(double width, double height,
 
 - (void)superviewResized:(NSNotification*)note {
   (void)note;
-  // While the window is in an interactive live resize the plane is hidden
-  if (_inLiveResize) return;
+  // Keep the video canvas and input coordinates aligned during live resizing.
   if (_relayoutPending) return;
   _relayoutPending = YES;
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -312,7 +318,7 @@ extern "C" void macplay_configure_window(double width, double height,
 - (void)windowWillStartLiveResize:(NSNotification*)note {
   (void)note;
   _inLiveResize = YES;
-  [self setHidden:YES];
+  [self relayout];
 }
 
 - (void)windowDidEndLiveResize:(NSNotification*)note {
@@ -481,6 +487,7 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
   // Use system appearance and untinted native glass.
   _controls=[[NSView alloc] initWithFrame:self.bounds];
   _controls.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
   if(@available(macOS 26.0,*)) {
    NSGlassEffectView *glass=[[NSGlassEffectView alloc] initWithFrame:self.bounds];
    glass.style=NSGlassEffectViewStyleClear;
@@ -489,7 +496,9 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
    glass.contentView=_controls;
    glass.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
    [self addSubview:glass];
-  } else {
+  } else
+  #endif
+  {
    NSVisualEffectView *background=[[NSVisualEffectView alloc] initWithFrame:self.bounds];
    background.material=NSVisualEffectMaterialHUDWindow;
    background.blendingMode=NSVisualEffectBlendingModeWithinWindow;
@@ -717,16 +726,18 @@ static void mpQueue(double x,double y,int down) {mpInputs.push_back({x,y,down});
  }
 }
 @end
-extern "C" uintptr_t macplay_window(double aspect) {
+static uintptr_t mpWindow(double aspect, bool present) {
  [MacPlayVideoApplication sharedApplication]; [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
- mpSetWindowAspect(aspect);
+ if(!macplayWindow || fabs(mpAspect-aspect)>0.0001)mpSetWindowAspect(aspect);
  if(!macplayWindow) {
   mpClosingWindow=false;
   NSWindowStyleMask style=NSWindowStyleMaskBorderless|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable;
+  if(!mpStrictPixels&&!mpDefaultFullscreen)style|=NSWindowStyleMaskResizable;
   macplayWindow=[[MacPlayVideoWindow alloc] initWithContentRect:NSMakeRect(0,0,1100,1100/mpAspect) styleMask:style backing:NSBackingStoreBuffered defer:NO];
   [macplayWindow setReleasedWhenClosed:NO]; [macplayWindow setTitle:@"MacPlay · CarPlay"];
   macplayWindow.opaque=NO;macplayWindow.backgroundColor=NSColor.clearColor;
   macplayWindow.hasShadow=YES;macplayWindow.acceptsMouseMovedEvents=YES;
+  [macplayWindow setContentMinSize:NSMakeSize(320,320/mpAspect)];
   [macplayWindow setMovable:!mpDefaultFullscreen]; [macplayWindow setMovableByWindowBackground:NO];
   [macplayWindow setCollectionBehavior:mpDefaultFullscreen ? NSWindowCollectionBehaviorFullScreenPrimary : NSWindowCollectionBehaviorFullScreenNone];
   mpWindowDelegate=[MacPlayWindowDelegate new]; [macplayWindow setDelegate:mpWindowDelegate];
@@ -739,6 +750,7 @@ extern "C" uintptr_t macplay_window(double aspect) {
   mpSetWindowAspect(mpAspect);
   [[NSNotificationCenter defaultCenter] addObserver:view selector:@selector(releaseInput:) name:NSWindowDidResignKeyNotification object:macplayWindow];
  }
+ if(!present)return (uintptr_t)macplayWindow.contentView;
  if(macplayWindow.isMiniaturized) [macplayWindow deminiaturize:nil];
  [NSApp activate];
  [macplayWindow makeKeyAndOrderFront:nil];
@@ -759,6 +771,8 @@ extern "C" uintptr_t macplay_window(double aspect) {
  } else if(!mpEnteringFullscreen) mpLogWindow();
  return (uintptr_t)macplayWindow.contentView;
 }
+extern "C" uintptr_t macplay_prepare_window(double aspect) {return mpWindow(aspect,false);}
+extern "C" uintptr_t macplay_window(double aspect) {return mpWindow(aspect,true);}
 extern "C" void macplay_pump() {
  @autoreleasepool {
   // Also cover an NSApplication created by another library before our subclass.
@@ -776,4 +790,17 @@ extern "C" void macplay_pump() {
 extern "C" int macplay_input(double *x,double *y,int *down) {
  if(mpInputs.empty())return 0;MPInput e=mpInputs.front();mpInputs.pop_front();
  *x=e.x;*y=e.y;*down=e.down;return 1;
+}
+
+// Authorization completion never starts capture. The current session decides
+// whether the grant is still relevant when polling on the main thread.
+extern "C" int macplay_microphone_permission() {
+ static std::atomic<bool> requested{false};
+ auto status=[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+ if(status==AVAuthorizationStatusAuthorized)return 1;
+ if(status==AVAuthorizationStatusDenied||status==AVAuthorizationStatusRestricted)return 0;
+ if(!requested.exchange(true)) {
+  [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted){(void)granted;requested.store(false);}];
+ }
+ return 2;
 }

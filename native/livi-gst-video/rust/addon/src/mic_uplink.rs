@@ -17,7 +17,7 @@ fn uplinks() -> &'static Mutex<HashMap<u32, Uplink>> {
 /// Starts capturing and sending. Returns the id the caller closes it by.
 pub fn open(cfg: UplinkConfig) -> Option<u32> {
     let uplink = Uplink::new(cfg)?;
-    uplink.start();
+    if !uplink.start(){return None}
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     uplinks().lock().unwrap_or_else(|e| e.into_inner()).insert(id, uplink);
     eprintln!("[cp_mic] uplink 0x{id:x} open");

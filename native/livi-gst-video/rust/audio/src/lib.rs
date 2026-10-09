@@ -6,6 +6,28 @@
 //! as associated data.
 
 use livi_crypto_node::open_impl;
+use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::time::Instant;
+
+pub struct ReceiveStats {
+    pub packets: AtomicU64,
+    pub bytes: AtomicU64,
+    pub decrypted: AtomicU64,
+    pub invalid: AtomicU64,
+    pub authentication_errors: AtomicU64,
+    last_packet_ms: AtomicU64,
+    began: Instant,
+}
+impl Default for ReceiveStats {
+    fn default() -> Self { Self {packets:0.into(),bytes:0.into(),decrypted:0.into(),invalid:0.into(),authentication_errors:0.into(),last_packet_ms:0.into(),began:Instant::now()} }
+}
+impl ReceiveStats {
+    pub fn silence_ms(&self) -> Option<u64> {
+        if self.packets.load(Ordering::Relaxed)==0 {None}
+        else {Some((self.began.elapsed().as_millis() as u64).saturating_sub(self.last_packet_ms.load(Ordering::Relaxed)))}
+    }
+}
+
 
 pub const RTP_HEADER_LEN: usize = 12;
 /// The 16-byte tag and the 8-byte nonce that follow the ciphertext.
@@ -21,6 +43,7 @@ pub trait AudioSink {
 }
 
 pub struct AudioStream {
+    stats: Arc<ReceiveStats>,
     key: [u8; 32],
     started: bool,
     sink: Box<dyn AudioSink + Send>,
@@ -28,8 +51,10 @@ pub struct AudioStream {
 
 impl AudioStream {
     pub fn new(key: [u8; 32], sink: Box<dyn AudioSink + Send>) -> Self {
-        Self { key, started: false, sink }
+        Self { key, started: false, sink, stats: Arc::new(ReceiveStats::default()) }
     }
+
+    pub fn stats(&self) -> Arc<ReceiveStats> {self.stats.clone()}
 
     /// The next packet counts as the first of a connection again.
     pub fn reset(&mut self) {
@@ -38,7 +63,11 @@ impl AudioStream {
 
     /// Decrypts one datagram and reports what it carries.
     pub fn push(&mut self, packet: &[u8]) {
+        self.stats.packets.fetch_add(1,Ordering::Relaxed);
+        self.stats.bytes.fetch_add(packet.len() as u64,Ordering::Relaxed);
+        self.stats.last_packet_ms.store(self.stats.began.elapsed().as_millis() as u64,Ordering::Relaxed);
         if packet.len() < RTP_HEADER_LEN + TAIL_LEN {
+            self.stats.invalid.fetch_add(1,Ordering::Relaxed);
             return;
         }
         let end = packet.len();
@@ -55,10 +84,11 @@ impl AudioStream {
         sealed.extend_from_slice(tag);
 
         let Some(payload) = open_impl(&self.key, &nonce, &sealed, aad) else {
-            eprintln!("[cp_audio] packet failed authentication");
+            self.stats.authentication_errors.fetch_add(1,Ordering::Relaxed);
             return;
         };
 
+        self.stats.decrypted.fetch_add(1,Ordering::Relaxed);
         let sample = u32::from_be_bytes([packet[4], packet[5], packet[6], packet[7]]);
         // Reported once per connection. The phone sends buffered media in
         // bursts with gaps.
@@ -228,6 +258,9 @@ mod tests {
         s.push(&packet(4242, 0, b"first"));
 
         assert_eq!(seen.payloads(), vec![(b"first".to_vec(), 4242)]);
+        assert_eq!(s.stats().packets.load(Ordering::Relaxed),1);
+        assert_eq!(s.stats().decrypted.load(Ordering::Relaxed),1);
+        assert!(s.stats().silence_ms().is_some());
     }
 
     #[test]
@@ -253,6 +286,8 @@ mod tests {
 
         assert!(seen.payloads().is_empty());
         assert!(seen.started().is_empty());
+        assert_eq!(s.stats().authentication_errors.load(Ordering::Relaxed),1);
+        assert_eq!(s.stats().decrypted.load(Ordering::Relaxed),0);
     }
 
     #[test]

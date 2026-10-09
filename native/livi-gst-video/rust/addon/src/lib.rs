@@ -447,8 +447,10 @@ pub fn set_audio_visualizer_tap(
 
 #[cfg(target_os="macos")]
 unsafe extern "C" {
+ fn macplay_microphone_permission() -> i32;
+ fn macplay_prepare_window(aspect:f64) -> usize;
  fn macplay_window(aspect: f64) -> usize;
- fn macplay_configure_window(width: f64,height: f64,panel_width: f64,panel_height: f64,fullscreen: bool);
+ fn macplay_configure_window(width: f64,height: f64,panel_width: f64,panel_height: f64,fullscreen: bool,strict: bool);
  fn macplay_pump();
  fn macplay_select_display(id:u32);
  fn macplay_close_window();
@@ -459,8 +461,8 @@ unsafe extern "C" {
 }
 #[cfg(target_os="macos")]
 #[napi]
-pub fn macplay_configure_window_options(width: f64,height: f64,panel_width: f64,panel_height: f64,fullscreen: bool) {
- unsafe { macplay_configure_window(width,height,panel_width,panel_height,fullscreen); }
+pub fn macplay_configure_window_options(width: f64,height: f64,panel_width: f64,panel_height: f64,fullscreen: bool,strict: Option<bool>) {
+ unsafe { macplay_configure_window(width,height,panel_width,panel_height,fullscreen,strict.unwrap_or(false)); }
 }
 #[cfg(target_os="macos")]
 #[napi]
@@ -499,3 +501,21 @@ static AUDIO_ACTIVITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU
 pub fn media_activity() -> Vec<u32> {
     vec![VIDEO_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed), AUDIO_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed)]
 }
+
+#[napi]
+pub fn decoded_video_size(plane: External<Plane>) -> Vec<u32> {
+    let (width, height) = plane.player.decoded_size();
+    vec![width, height]
+}
+#[cfg(target_os="macos")]
+#[napi]
+pub fn macplay_prepare_video_window(aspect:f64) -> Buffer {
+    unsafe { macplay_prepare_window(aspect).to_ne_bytes().to_vec().into() }
+}
+
+#[napi]
+pub fn audio_statistics() -> String {audio_recv::statistics()}
+
+#[cfg(target_os="macos")]
+#[napi]
+pub fn microphone_permission() -> i32 {unsafe {macplay_microphone_permission()}}

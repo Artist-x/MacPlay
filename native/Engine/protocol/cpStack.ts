@@ -1050,7 +1050,9 @@ export class CpStack extends EventEmitter {
     this._audioById.set(hostStreamId, {
       prof,
       inProcess: meta.inProcess,
-      started: (firstSample: number) => {
+      started: async (firstSample: number) => {
+        const current=()=>!this._closing&&!session.ended&&this._liveSession===session&&session.audioMeta.includes(meta)
+        if(!current())return
         meta.origin = { firstSample, originNs: process.hrtime.bigint() }
         if (!inputKey || meta.micStreamId != null) return
         const micOpts = {
@@ -1065,7 +1067,8 @@ export class CpStack extends EventEmitter {
           device: this.cfg.audioInputDevice?.() || undefined
         }
         if (meta.inProcess) {
-          const id = openMicUplink(inputKey, micOpts)
+          const id = await openMicUplink(inputKey, micOpts, current)
+          if(!current()){if(id!=null)closeMicUplink(id);return}
           if (id == null) {
             console.warn('[cpStack] mic uplink failed to open')
             return

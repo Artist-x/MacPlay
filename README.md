@@ -5,7 +5,7 @@
 <p align="center">在Mac上显示和操作iPhone的CarPlay界面，支持USB直连与共用Wi-Fi无线连接。</p>
 
 <p align="center">
-  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.2.1-2563eb?style=flat-square" alt="版本1.2.1"></a>
+  <a href="scripts/package-native.sh"><img src="https://img.shields.io/badge/version-1.2.2-2563eb?style=flat-square" alt="版本1.2.2"></a>
   <a href="#使用条件"><img src="https://img.shields.io/badge/platform-macOS%2014%2B-555555?style=flat-square" alt="运行平台"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb?style=flat-square" alt="项目许可"></a>
 </p>
@@ -37,8 +37,8 @@
 
 | Mac类型 | 安装包 |
 | --- | --- |
-| AppleM系列 | `MacPlay-1.2.1-arm64.dmg` |
-| Intel | `MacPlay-1.2.1-x86_64.dmg` |
+| AppleM系列 | `MacPlay-1.2.2-arm64.dmg` |
+| Intel | `MacPlay-1.2.2-x86_64.dmg` |
 
 打开DMG，将MacPlay拖入“应用程序”后启动。若macOS拦截，在“系统设置→隐私与安全性”中允许打开。当前包采用本地签名，未经过Apple公证。
 
@@ -64,7 +64,7 @@ MacPlay通过蓝牙引导，再通过共用Wi-Fi传输音视频，不创建名�
 ## 主要功能
 
 - 原生设置界面：SwiftUI主窗口提供连接、显示、音频和关于四页，AppKit独立窗口显示CarPlay。
-- 多屏与物理像素：选择内建或外接显示器，按实际屏幕像素设置固定窗口，支持原生像素和自定义分辨率。
+- 多屏与窗口适配：选择内建或外接显示器，默认适配窗口并可等比例调整大小，也可开启严格物理像素显示。
 - 点击与触控板：支持点击、拖动和双指滚动，滚动转换为CarPlay触摸滑动。
 - 音频与设备：实时调整媒体和通话音量，分别选择输入/输出设备，默认跟随系统。
 - 系统媒体控件：向macOS播放面板同步歌曲、歌手、专辑、封面、进度和播放状态，支持播放控制及播放器允许的进度跳转。
@@ -91,7 +91,9 @@ MacPlay通过蓝牙引导，再通过共用Wi-Fi传输音视频，不创建名�
 
 ## 显示与声音
 
-“显示”页提供屏幕原生像素（避开刘海）、1280×720、1920×1080、2560×1440和自定义宽高。默认720p使用可移动、不可调整大小的固定窗口；原生像素模式自动全屏并避开刘海。尺寸超过所选屏幕可见区域时明确提示，不自动缩小。
+“显示”页提供屏幕原生像素（避开刘海）、1280×720、1920×1080、2560×1440和自定义宽高。默认720p关闭“严格按屏幕物理像素显示”，窗口按画面比例适配所选屏幕，初始尺寸不超过可用区域的80%，可以拖动边框等比例调整大小；请求给iPhone的分辨率不变。开启严格像素显示后，窗口按物理像素固定大小，仍可移动。原生像素模式始终全屏并避开刘海。更改显示选项后点击“应用并重新连接”。
+
+收到首帧解码画面后才打开CarPlay窗口。将鼠标移到画面顶部并停留片刻，可显示悬浮标题栏，用于拖动、最小化或关闭窗口；关闭时会询问是否断开连接。
 
 帧率可选30/60/90/120fps，默认60fps。120的视频启动协商失败后依次尝试90和60，90失败后尝试60；回退只影响本次连接。高帧率是请求上限，实际输出由iPhone、网络和解码能力决定。
 
@@ -114,7 +116,7 @@ CarPlay自身的“设置→显示屏→智能缩放显示”可能改变图标�
 | USB未识别 | 更换数据线，解锁iPhone并确认信任，查看连接阶段 |
 | 无线一直等待连接 | 检查配对、目标设备、SSID和密码，确认Wi-Fi允许设备互访 |
 | 读取不到Wi-Fi名称或密码 | 查看按钮下方的灰色结果提示；授权定位/钥匙串访问，或手动填写。密码读取失败保留实际系统状态码 |
-| 自定义分辨率无法启动 | 降低分辨率或选择原生像素模式，确保固定窗口能放入屏幕 |
+| 自定义分辨率无法启动 | 关闭严格像素显示以适配窗口，或降低分辨率、选择原生像素模式 |
 | 系统进度条不能拖动 | 播放器需提供有效时长和跳转权限；直播通常不支持 |
 | 选择另一台iPhone后没有连接 | 确认目标已接入或配对，再应用并重新连接 |
 
@@ -124,7 +126,7 @@ CarPlay自身的“设置→显示屏→智能缩放显示”可能改变图标�
 
 ## 认证与数据
 
-1.2.1内置实验性认证材料，首次启动不覆盖本机已有身份。也可在“关于→认证文件→导入认证文件”选择匹配且获准使用的`identity.pk8`与`certificate.p7b`；普通Apple开发者签名证书不能替代配件认证。材料来源见[认证来源](assets/authentication/SOURCE.txt)。公开下载不等于取得再分发授权，公开分发前应确认材料权利。
+1.2.2内置实验性认证材料，首次启动不覆盖本机已有身份。也可在“关于→认证文件→导入认证文件”选择匹配且获准使用的`identity.pk8`与`certificate.p7b`；普通Apple开发者签名证书不能替代配件认证。材料来源见[认证来源](assets/authentication/SOURCE.txt)。公开下载不等于取得再分发授权，公开分发前应确认材料权利。
 
 设置、Wi-Fi密码、设备记录与配对身份保存在本机应用支持目录，不上传到服务器。定位权限用于读取Wi-Fi信息，蓝牙/本地网络用于连接，麦克风用于通话和语音。分享诊断日志前应遮盖手机名称、地址和网络信息。
 
@@ -146,13 +148,15 @@ pnpm run build -- --arch=arm64
 pnpm run build -- --arch=x64
 ~~~
 
-生成`dist/MacPlay.app`和`dist/MacPlay-1.2.1-<arch>.dmg`，架构为`arm64`或`x86_64`。脚本处理SwiftUI应用、蓝牙桥接、Rust后端、音视频模块和Node.js服务，并进行本地签名与DMG打包。
+生成`dist/MacPlay.app`和`dist/MacPlay-1.2.2-<arch>.dmg`，架构为`arm64`或`x86_64`。脚本处理SwiftUI应用、蓝牙桥接、Rust后端、音视频模块和Node.js服务，并进行本地签名与DMG打包。
 
 ## 更新日志
 
-1.2.1新增可选无线自动重连，完善断线检测、连接状态和等待期限，修正切换网络后的密码匹配，并改进日志、后台更新检查与系统媒体同步。完整变更见[CHANGELOG](CHANGELOG.md)。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
+1.2.2完善无线认证后的服务发现与有限重试，首帧解码后再显示窗口，新增可选窗口适配，增强音频统计及麦克风会话隔离。包含[Artist-x的PR#6](https://github.com/Roylyl/MacPlay/pull/6)提供的悬浮标题栏和后台窗口恢复改进。完整变更见[CHANGELOG](CHANGELOG.md)。Intel支持由[drewpall的PR#1](https://github.com/Roylyl/MacPlay/pull/1)提供基础实现。
 
 ## 来源与许可
+
+网络发现实现参考同系列[WinPlay](https://github.com/Roylyl/WinPlay)，保留来源说明。
 
 MacPlay基于[LIVI](https://github.com/f-io/LIVI)，参考[DiPlay](https://github.com/shihabal3amri/DiPlay)，保留LasseHeitgres及贡献者的版权和许可声明，见[NOTICE](NOTICE)。项目沿用GPL-3.0-or-later，见[LICENSE](LICENSE)；运行库许可位于`assets/licenses`与`assets/gstreamer/LICENSES`。
 

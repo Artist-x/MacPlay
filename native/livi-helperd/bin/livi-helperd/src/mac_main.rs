@@ -143,8 +143,10 @@ fn start_carplay() -> Result<(), String> {
     } else {
         tokio::spawn(crate::wired::watch_usbmuxd(auth,identity,cp.clone(),bcast.clone(),state,LinkPresence::always()));
     }
+    if env_s("MACPLAY_EXTERNAL_DISCOVERY", "") != "1" {
     let b=Bonjour::start(env_s("LIVI_CP_DEVICE_ID","02:4d:50:00:00:01"),cp.airplay_port as u16,cp.source_version,env_s("LIVI_CP_PK",""),env_s("LIVI_CP_PI",""),bcast).map_err(|e|e.to_string())?;
     let _=BONJOUR.set(b);
+    }
     println!("[MacPlay] {} receiver ready on port {}",if wireless {"wireless"} else {"wired USB"},cp.airplay_port);
     Ok(())
 }

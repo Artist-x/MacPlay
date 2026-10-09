@@ -40,6 +40,7 @@ struct PlaySettings: Codable {
     var inputDevice: String? = nil
     var outputDevice: String? = nil
     var callVolume: Double? = nil
+    var strictPixels: Bool? = nil
     var resolution = "1280x720"
     var width = 1280
     var height = 720
@@ -123,6 +124,7 @@ struct PlaySettings: Codable {
         if let data = try? Data(contentsOf: configURL), let decoded = try? JSONDecoder().decode(PlaySettings.self, from:data) { settings = decoded }
         MacPlayLocalization.language=settings.language ?? "system"
         if ![30,60,90,120].contains(settings.fps) { settings.fps=60 }
+        if settings.resolution == "1920x720" { settings.resolution="custom" }
         if settings.resolution == "3840x2160" { settings.resolution="native" }
         configureRemoteCommands(); refreshHardware(); installBundledCredentials(); updateResolution(); inspectCredentials(); detectNetwork(); refreshUSB()
         NotificationCenter.default.addObserver(forName:NSApplication.didChangeScreenParametersNotification,object:nil,queue:.main){[weak self] _ in Task { @MainActor in self?.refreshHardware(); self?.updateResolution() }}
@@ -489,10 +491,10 @@ struct PlaySettings: Codable {
     func save() throws {
         updateResolution()
         settings.width=max(320,min(7680,settings.width/2*2));settings.height=max(200,min(4320,settings.height/2*2))
-        if settings.resolution != "native",let screen=selectedScreen,
+        if settings.strictPixels == true,settings.resolution != "native",let screen=selectedScreen,
            let physicalWidth=settings.screenPixelWidth,let physicalHeight=settings.screenPixelHeight {
             let content=NSRect(x:0,y:0,width:Double(settings.width)*screen.frame.width/Double(physicalWidth),height:Double(settings.height)*screen.frame.height/Double(physicalHeight))
-            let frame=NSWindow.frameRect(forContentRect:content,styleMask:[.titled,.closable,.miniaturizable])
+            let frame=NSWindow.frameRect(forContentRect:content,styleMask:[.borderless,.closable,.miniaturizable])
             if frame.width>screen.visibleFrame.width || frame.height>screen.visibleFrame.height {
                 throw NSError(domain:"MacPlay",code:2,userInfo:[NSLocalizedDescriptionKey:"所选分辨率超过当前屏幕的可见区域，无法按物理像素比例显示。请选择较低分辨率，或使用原生像素全屏模式。"])
             }
@@ -801,15 +803,16 @@ struct SettingsView: View {
                         Section(L("视频分辨率")) {
                             Picker(L("分辨率"),selection:$model.settings.resolution) {
                                 Text(L("屏幕原生像素（避开刘海）")).tag("native")
-                                ForEach(["1280x720","1920x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
+                                ForEach(["1280x720","1920x1080","2560x1440"],id:\.self){Text($0.replacingOccurrences(of:"x",with:"×")).tag($0)}
                                 Text(L("自定义")).tag("custom")
                             }.onChange(of:model.settings.resolution){_,_ in model.updateResolution()}
                             if model.settings.resolution == "custom" {
                                 TextField(L("宽度（像素）"),value:$model.settings.width,format:.number)
                                 TextField(L("高度（像素）"),value:$model.settings.height,format:.number)
                             }
+                            Toggle(L("严格按屏幕物理像素显示"),isOn:Binding(get:{model.settings.strictPixels ?? false},set:{model.settings.strictPixels=$0})).disabled(model.settings.resolution == "native")
                             LabeledContent(L("请求像素"),value:"\(model.settings.width)×\(model.settings.height)")
-                            Text(L("原生像素模式默认全屏并避开刘海。其他分辨率按屏幕真实物理像素换算固定窗口，允许拖动标题栏移动，但不能调整窗口大小；超过可见区域的尺寸无法启动。")).font(.callout).foregroundStyle(.secondary)
+                            Text(L("原生像素模式全屏显示。关闭严格像素显示后，窗口适配屏幕并可等比例调整大小，不改变请求分辨率。")).font(.callout).foregroundStyle(.secondary)
                         }
                         Section(L("流畅度")) {
                             Picker(L("最高帧率"),selection:$model.settings.fps){ForEach([30,60,90,120],id:\.self){Text(L("\($0)fps")).tag($0)}}
